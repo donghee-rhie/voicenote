@@ -1,0 +1,11 @@
+## NOTE: Primary build config is in package.json "build" field.
+## This file contains supplemental settings only.
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+publish:
+  provider: "github"

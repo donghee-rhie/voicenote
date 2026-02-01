@@ -1,0 +1,100 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "darwin", "darwin-arm64", "windows", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String?
+  role         String    @default("USER")
+  status       String    @default("PENDING")
+  language     String    @default("ko")
+
+  sessions Session[]
+  settings UserSettings?
+  logs     ActivityLog[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+}
+
+model Session {
+  id          String  @id @default(cuid())
+  userId      String
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String?
+  description String?
+  originalText String?
+  refinedText  String?
+  summary      String?
+  audioPath    String?
+  duration     Int?
+  language     String  @default("ko-KR")
+  provider     String?
+  model        String?
+  formatType   String  @default("DEFAULT")
+  status       String  @default("DRAFT")
+  tags         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model UserSettings {
+  id                   String  @id @default(cuid())
+  userId               String  @unique
+  user                 User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pasteFormat          String  @default("FORMATTED")
+  autoFormatDetection  Boolean @default(true)
+  listDetection        Boolean @default(true)
+  markdownOutput       Boolean @default(false)
+  speakerDiarization   Boolean @default(false)
+  viewMode             String  @default("timeline")
+  preferredSTTProvider String  @default("groq")
+  preferredLanguage    String  @default("ko-KR")
+  autoSaveInterval     Int     @default(5000)
+  sttModel             String  @default("whisper-large-v3-turbo")
+  refineModel          String  @default("llama-3.3-70b-versatile")
+  // Recording settings
+  maxRecordingDuration Int     @default(300)
+  autoCopyOnComplete   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  details   String?
+  ipAddress String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model SystemSetting {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  value       String?
+  description String?
+  type        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
