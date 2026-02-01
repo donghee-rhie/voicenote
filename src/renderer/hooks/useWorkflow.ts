@@ -168,10 +168,25 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
         setCurrentSegments(null);
       }
 
-      // 전사 완료 알림
-      await showNotification('전사 완료', '텍스트 변환이 완료되었습니다');
+      // 전사 완료 즉시 원문 복사 + 붙여넣기 (사용자가 바로 사용 가능)
+      if (settings?.autoCopyOnComplete) {
+        try {
+          await window.electronAPI.invoke('system:clipboard-copy', originalText);
+          options.onAutoCopy?.(originalText);
+          console.log('[Workflow] Auto-copied original text to clipboard immediately after transcription');
+          // 즉시 자동 붙여넣기 (Cmd+V 시뮬레이션)
+          await window.electronAPI.invoke('system:auto-paste');
+          console.log('[Workflow] Auto-paste simulated with original text');
+          await showNotification('전사 완료', '원문이 붙여넣기 되었습니다. 정제 진행 중...');
+        } catch (copyErr) {
+          console.error('Immediate auto copy/paste failed:', copyErr);
+          await showNotification('전사 완료', '텍스트 변환 완료. 정제 진행 중...');
+        }
+      } else {
+        await showNotification('전사 완료', '텍스트 변환 완료. 정제 진행 중...');
+      }
 
-      // Step 3: Refine
+      // Step 3: Refine (백그라운드에서 진행)
       setStatus('refining');
       setProgress('텍스트를 정제하고 요약 중...');
 
@@ -227,23 +242,19 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
         throw new Error('세션 저장에 실패했습니다');
       }
 
-      // Auto copy if enabled - pasteFormat 설정에 따라 해당 텍스트 복사
+      // 정제 완료 후 정제된 텍스트를 클립보드에 복사 (붙여넣기는 하지 않음 - 이미 원문이 붙여넣기 됨)
       let textToCopy = refinedText; // 기본값: 정제 텍스트
-      if (formatType === 'DEFAULT') {
-        textToCopy = originalText;
-      } else if (formatType === 'SCRIPT') {
+      if (formatType === 'SCRIPT') {
         textToCopy = formalText || refinedText;
       }
-      if (settings?.autoCopyOnComplete && textToCopy) {
+      // 정제 텍스트를 클립보드에 복사 (사용자가 필요시 붙여넣을 수 있도록)
+      if (textToCopy) {
         try {
           await window.electronAPI.invoke('system:clipboard-copy', textToCopy);
-          options.onAutoCopy?.(textToCopy);
-          console.log('[Workflow] Auto-copied text to clipboard (format:', formatType, ')');
-          // 자동 붙여넣기 (Cmd+V 시뮬레이션)
-          await window.electronAPI.invoke('system:auto-paste');
-          console.log('[Workflow] Auto-paste simulated');
+          console.log('[Workflow] Refined text copied to clipboard (format:', formatType, ')');
+          // 붙여넣기는 하지 않음 - 원문이 이미 붙여넣기 됨
         } catch (copyErr) {
-          console.error('Auto copy/paste failed:', copyErr);
+          console.error('Refined text copy failed:', copyErr);
         }
       }
 
@@ -252,9 +263,8 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
       setStatus('complete');
       setProgress('완료!');
       
-      // 완료 알림
-      const copyMsg = settings?.autoCopyOnComplete ? ' (클립보드에 복사됨)' : '';
-      await showNotification('전사 완료', `처리가 완료되었습니다${copyMsg}`);
+      // 완료 알림 - 정제 완료 알림
+      await showNotification('정제 완료', '정제된 텍스트가 클립보드에 복사되었습니다');
       
       // suppress 해제만 하고 창은 표시하지 않음 (알림으로 충분)
       try {
