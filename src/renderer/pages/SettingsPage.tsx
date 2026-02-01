@@ -10,7 +10,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../components/ui/use-toast';
 import { Badge } from '../components/ui/badge';
-import { User, Mic, FileText, Settings, Keyboard, Key, Eye, EyeOff, Check, X, Loader2 } from 'lucide-react';
+import { User, Mic, FileText, Settings, Keyboard, Key, Eye, EyeOff, Check, X, Loader2, Palette } from 'lucide-react';
+import { ThemeSelector } from '../components/ThemeSelector';
 import { IPC_CHANNELS } from '@common/types/ipc';
 import type { ApiKeyType } from '@common/types/ipc';
 
@@ -665,6 +666,20 @@ export function SettingsPage() {
               onCheckedChange={setMarkdownOutput}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Theme Settings */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Palette className="h-5 w-5" />
+            테마 설정
+          </CardTitle>
+          <CardDescription>앱의 외관을 변경하세요</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ThemeSelector />
         </CardContent>
       </Card>
 

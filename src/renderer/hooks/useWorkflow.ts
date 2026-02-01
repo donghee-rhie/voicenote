@@ -143,10 +143,15 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
         }
       );
 
-      console.log('[Workflow] Transcription result:', transcriptionResult);
+      console.log('[Workflow] Transcription result:', JSON.stringify(transcriptionResult, null, 2));
 
-      if (!transcriptionResult.success || !transcriptionResult.data?.text) {
-        throw new Error(transcriptionResult.error || '변환에 실패했습니다');
+      if (!transcriptionResult.success) {
+        throw new Error(transcriptionResult.error || '전사 요청이 실패했습니다');
+      }
+
+      if (!transcriptionResult.data?.text) {
+        console.error('[Workflow] Transcription data:', transcriptionResult.data);
+        throw new Error('전사 결과가 비어있습니다. 녹음 내용을 확인해주세요.');
       }
 
       const originalText = transcriptionResult.data.text;
@@ -242,29 +247,13 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
         throw new Error('세션 저장에 실패했습니다');
       }
 
-      // 정제 완료 후 정제된 텍스트를 클립보드에 복사 (붙여넣기는 하지 않음 - 이미 원문이 붙여넣기 됨)
-      let textToCopy = refinedText; // 기본값: 정제 텍스트
-      if (formatType === 'SCRIPT') {
-        textToCopy = formalText || refinedText;
-      }
-      // 정제 텍스트를 클립보드에 복사 (사용자가 필요시 붙여넣을 수 있도록)
-      if (textToCopy) {
-        try {
-          await window.electronAPI.invoke('system:clipboard-copy', textToCopy);
-          console.log('[Workflow] Refined text copied to clipboard (format:', formatType, ')');
-          // 붙여넣기는 하지 않음 - 원문이 이미 붙여넣기 됨
-        } catch (copyErr) {
-          console.error('Refined text copy failed:', copyErr);
-        }
-      }
-
       // Complete
       setCurrentSession(newSession);
       setStatus('complete');
       setProgress('완료!');
-      
-      // 완료 알림 - 정제 완료 알림
-      await showNotification('정제 완료', '정제된 텍스트가 클립보드에 복사되었습니다');
+
+      // 완료 알림 - 정제 완료만 알림 (클립보드 복사 안 함)
+      await showNotification('정제 완료', '텍스트 정제 및 요약이 완료되었습니다');
       
       // suppress 해제만 하고 창은 표시하지 않음 (알림으로 충분)
       try {
