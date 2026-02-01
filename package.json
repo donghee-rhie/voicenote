@@ -1,6 +1,6 @@
 {
   "name": "voicenote-electron",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "VoiceNote - Speech-to-Text Electron Desktop App",
   "main": "dist/main/main/index.js",
   "scripts": {
@@ -100,7 +100,9 @@
       {
         "from": "node_modules/.prisma",
         "to": "node_modules/.prisma",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       "prisma/**/*"
     ],
