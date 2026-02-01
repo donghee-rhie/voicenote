@@ -4,6 +4,7 @@ const mockUserSettings = {
   findUnique: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  upsert: vi.fn(),
 };
 
 const mockSystemSetting = {
@@ -59,31 +60,21 @@ describe('settings-service', () => {
   });
 
   describe('getUserSettings', () => {
-    it('should return existing settings', async () => {
-      mockUserSettings.findUnique.mockResolvedValue(sampleUserSettings);
+    it('should return settings via upsert', async () => {
+      mockUserSettings.upsert.mockResolvedValue(sampleUserSettings);
 
       const result = await getUserSettings('user-1');
 
       expect(result).toEqual(sampleUserSettings);
-      expect(mockUserSettings.findUnique).toHaveBeenCalledWith({ where: { userId: 'user-1' } });
-      expect(mockUserSettings.create).not.toHaveBeenCalled();
-    });
-
-    it('should create default settings when none exist', async () => {
-      mockUserSettings.findUnique.mockResolvedValue(null);
-      mockUserSettings.create.mockResolvedValue(sampleUserSettings);
-
-      const result = await getUserSettings('user-1');
-
-      expect(result).toEqual(sampleUserSettings);
-      expect(mockUserSettings.findUnique).toHaveBeenCalledWith({ where: { userId: 'user-1' } });
-      expect(mockUserSettings.create).toHaveBeenCalledWith({
-        data: { userId: 'user-1' },
+      expect(mockUserSettings.upsert).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
+        update: {},
+        create: { userId: 'user-1' },
       });
     });
 
     it('should throw on error', async () => {
-      mockUserSettings.findUnique.mockRejectedValue(new Error('DB error'));
+      mockUserSettings.upsert.mockRejectedValue(new Error('DB error'));
 
       await expect(getUserSettings('user-1')).rejects.toThrow(
         'Failed to get user settings: DB error'
@@ -91,7 +82,7 @@ describe('settings-service', () => {
     });
 
     it('should throw unknown error for non-Error objects', async () => {
-      mockUserSettings.findUnique.mockRejectedValue(undefined);
+      mockUserSettings.upsert.mockRejectedValue(undefined);
 
       await expect(getUserSettings('user-1')).rejects.toThrow(
         'Failed to get user settings: Unknown error'
@@ -101,42 +92,28 @@ describe('settings-service', () => {
 
   describe('updateUserSettings', () => {
     it('should ensure settings exist then update', async () => {
-      // getUserSettings will be called internally, which calls findUnique
-      mockUserSettings.findUnique.mockResolvedValue(sampleUserSettings);
+      // getUserSettings will be called internally via upsert
+      mockUserSettings.upsert.mockResolvedValue(sampleUserSettings);
       const updated = { ...sampleUserSettings, viewMode: 'GRID' };
       mockUserSettings.update.mockResolvedValue(updated);
 
       const result = await updateUserSettings('user-1', { viewMode: 'GRID' });
 
       expect(result).toEqual(updated);
-      // getUserSettings was called first
-      expect(mockUserSettings.findUnique).toHaveBeenCalledWith({ where: { userId: 'user-1' } });
+      // getUserSettings was called first (uses upsert)
+      expect(mockUserSettings.upsert).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
+        update: {},
+        create: { userId: 'user-1' },
+      });
       expect(mockUserSettings.update).toHaveBeenCalledWith({
         where: { userId: 'user-1' },
         data: { viewMode: 'GRID' },
       });
     });
 
-    it('should create defaults then update if settings do not exist', async () => {
-      mockUserSettings.findUnique.mockResolvedValue(null);
-      mockUserSettings.create.mockResolvedValue(sampleUserSettings);
-      const updated = { ...sampleUserSettings, markdownOutput: true };
-      mockUserSettings.update.mockResolvedValue(updated);
-
-      const result = await updateUserSettings('user-1', { markdownOutput: true });
-
-      expect(result).toEqual(updated);
-      expect(mockUserSettings.create).toHaveBeenCalledWith({
-        data: { userId: 'user-1' },
-      });
-      expect(mockUserSettings.update).toHaveBeenCalledWith({
-        where: { userId: 'user-1' },
-        data: { markdownOutput: true },
-      });
-    });
-
     it('should throw on error', async () => {
-      mockUserSettings.findUnique.mockResolvedValue(sampleUserSettings);
+      mockUserSettings.upsert.mockResolvedValue(sampleUserSettings);
       mockUserSettings.update.mockRejectedValue(new Error('DB error'));
 
       await expect(updateUserSettings('user-1', { viewMode: 'GRID' })).rejects.toThrow(
