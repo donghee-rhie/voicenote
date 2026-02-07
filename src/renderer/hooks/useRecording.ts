@@ -158,7 +158,7 @@ export function useRecording(options: UseRecordingOptions = {}): UseRecordingRes
 
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType,
-        audioBitsPerSecond: 32000,
+        audioBitsPerSecond: 64000,
       });
       mediaRecorderRef.current = mediaRecorder;
 

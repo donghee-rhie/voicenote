@@ -729,12 +729,17 @@ export function SettingsPage() {
               id="max-recording-duration"
               type="number"
               min="60"
-              max="600"
+              max="7200"
               value={maxRecordingDuration}
               onChange={(e) => setMaxRecordingDuration(Number(e.target.value))}
             />
             <p className="text-sm text-muted-foreground">
-              60초(1분)에서 600초(10분) 사이의 값을 입력하세요. 종료 60초 전에 경고가 표시됩니다.
+              60초(1분)에서 7,200초(120분) 사이의 값을 입력하세요. 종료 60초 전에 경고가 표시됩니다.
+              {maxRecordingDuration > 600 && (
+                <span className="block mt-1 text-amber-600">
+                  장시간 녹음은 청크 분할 전사로 처리됩니다.
+                </span>
+              )}
             </p>
           </div>
 

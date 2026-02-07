@@ -6,6 +6,7 @@ import { useWorkflow } from '@/hooks/useWorkflow';
 import { RecordingTimer } from './RecordingTimer';
 import { AudioLevelMeter } from './AudioLevelMeter';
 import { AudioDropZone } from '@/components/AudioDropZone';
+import { ProcessingProgress } from '@/components/ProcessingProgress';
 import { Mic, Square, Loader2, Radio } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
@@ -140,6 +141,7 @@ export function RecordingPanel({ onRecordingComplete, onRecordingStart, classNam
     currentFormalText,
     error,
     progress,
+    processingProgress,
     // Recording state
     isRecording,
     duration,
@@ -308,12 +310,17 @@ export function RecordingPanel({ onRecordingComplete, onRecordingStart, classNam
             {/* Status Text */}
             <StatusText
               error={error}
-              progress={progress}
+              progress={processingProgress ? null : progress}
               isRecording={isRecording}
               mode={mode}
               onRetry={handleRetry}
             />
           </div>
+
+          {/* Processing Progress (for chunked transcription/refinement) */}
+          {isProcessing && processingProgress && (
+            <ProcessingProgress data={processingProgress} />
+          )}
 
           {/* Audio Drop Zone */}
           {!isRecording && !isProcessing && (status === 'idle' || status === 'complete') && (

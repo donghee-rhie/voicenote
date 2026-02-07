@@ -5,13 +5,58 @@ import { app } from 'electron';
 import { transcribeAudio } from '../services/stt-service';
 import { transcribeWithGroq, isGroqConfigured } from '../services/groq-stt-service';
 import { transcribeWithElevenLabs, isElevenLabsConfigured } from '../services/elevenlabs-stt-service';
+import { AudioChunker } from '../services/audio-chunker';
+import { TranscriptionMerger, ChunkTranscription } from '../services/transcription-merger';
+import { withRetry } from '../services/retry-handler';
 import { IPC_CHANNELS } from '../../common/types/ipc';
-import type { TranscriptionRequest, TranscriptionResult, STTProvider } from '../../common/types/ipc';
+import type { TranscriptionRequest, TranscriptionResult, STTProvider, ProcessingProgress } from '../../common/types/ipc';
 
 let recordingState = {
   isRecording: false,
   startTime: 0,
 };
+
+// Audio chunker with 7-min chunks, 3s overlap
+const audioChunker = new AudioChunker();
+const transcriptionMerger = new TranscriptionMerger(3);
+
+/**
+ * Send processing progress to renderer
+ */
+function sendProgress(mainWindow: BrowserWindow, progress: ProcessingProgress) {
+  mainWindow.webContents.send(IPC_CHANNELS.TRANSCRIPTION.CHUNK_PROGRESS, progress);
+}
+
+/**
+ * Transcribe a single audio file with the selected provider (with retry)
+ */
+async function transcribeSingle(
+  audioPath: string,
+  provider: STTProvider,
+  options: { language?: string; model?: string; diarize?: boolean; numSpeakers?: number }
+): Promise<TranscriptionResult> {
+  const { language, model, diarize, numSpeakers } = options;
+
+  switch (provider) {
+    case 'groq':
+      return transcribeWithGroq(audioPath, {
+        language,
+        model: (model as 'whisper-large-v3' | 'whisper-large-v3-turbo' | 'distil-whisper-large-v3-en') || 'whisper-large-v3-turbo',
+        response_format: 'verbose_json',
+      });
+
+    case 'elevenlabs':
+      return transcribeWithElevenLabs(audioPath, {
+        language,
+        model: (model as 'scribe_v1' | 'scribe_v2') || 'scribe_v1',
+        diarize,
+        numSpeakers,
+      });
+
+    default:
+      throw new Error(`Provider '${provider}' is not supported`);
+  }
+}
 
 /**
  * Register transcription and audio-related IPC handlers
@@ -20,7 +65,7 @@ export function registerTranscriptionHandlers(mainWindow: BrowserWindow) {
   // Start transcription
   ipcMain.handle(IPC_CHANNELS.TRANSCRIPTION.START, async (_event, request: TranscriptionRequest) => {
     try {
-      const { audioPath, language, provider, model, diarize, numSpeakers } = request;
+      const { audioPath, language, provider, model, diarize, numSpeakers, recordingDuration } = request;
 
       if (!audioPath) {
         return {
@@ -37,52 +82,70 @@ export function registerTranscriptionHandlers(mainWindow: BrowserWindow) {
         };
       }
 
+      // Route to appropriate provider
+      const selectedProvider = provider || 'groq';
+
+      // Validate provider configuration
+      if (selectedProvider === 'groq' && !isGroqConfigured()) {
+        return {
+          success: false,
+          error: 'Groq API 키가 설정되지 않았습니다. 설정에서 API 키를 입력해주세요.',
+        };
+      }
+      if (selectedProvider === 'elevenlabs' && !isElevenLabsConfigured()) {
+        return {
+          success: false,
+          error: 'ElevenLabs API 키가 설정되지 않았습니다. 설정에서 API 키를 입력해주세요.',
+        };
+      }
+
       // Emit progress event
       mainWindow.webContents.send(IPC_CHANNELS.TRANSCRIPTION.PROGRESS, {
         status: 'processing',
         progress: 0,
       });
 
+      const recordingDurationSec = recordingDuration || 0;
+
       let result: TranscriptionResult;
 
-      // Route to appropriate provider
-      const selectedProvider = provider || 'groq'; // Default to Groq
+      // ElevenLabs handles long files natively with better diarization - no chunking needed
+      // Only Groq Whisper needs chunking due to ~25MB file size limit
+      const needsChunking = recordingDurationSec > 0
+        && audioChunker.needsChunking(recordingDurationSec)
+        && selectedProvider !== 'elevenlabs';
 
-      switch (selectedProvider) {
-        case 'groq':
-          if (!isGroqConfigured()) {
-            return {
-              success: false,
-              error: 'Groq API 키가 설정되지 않았습니다. 설정에서 API 키를 입력해주세요.',
-            };
-          }
-          result = await transcribeWithGroq(audioPath, {
-            language,
-            model: (model as 'whisper-large-v3' | 'whisper-large-v3-turbo' | 'distil-whisper-large-v3-en') || 'whisper-large-v3-turbo',
-            response_format: 'verbose_json',
-          });
-          break;
+      if (needsChunking) {
+        console.log(`[Transcription] Long recording detected (${recordingDurationSec}s), using chunked transcription for ${selectedProvider}`);
+        result = await handleChunkedTranscription(
+          mainWindow,
+          audioPath,
+          recordingDurationSec,
+          selectedProvider,
+          { language, model, diarize, numSpeakers }
+        );
+      } else {
+        // Single transcription (short recording, or ElevenLabs which handles long files natively)
+        const isLongElevenLabs = selectedProvider === 'elevenlabs' && recordingDurationSec > 420;
+        sendProgress(mainWindow, {
+          stage: 'transcribing',
+          stageLabel: isLongElevenLabs
+            ? `전사 중... (${Math.round(recordingDurationSec / 60)}분 분량, 화자 분리 포함)`
+            : '전사 중...',
+          currentChunk: 1,
+          totalChunks: 1,
+          overallProgress: 10,
+        });
 
-        case 'elevenlabs':
-          if (!isElevenLabsConfigured()) {
-            return {
-              success: false,
-              error: 'ElevenLabs API 키가 설정되지 않았습니다. 설정에서 API 키를 입력해주세요.',
-            };
-          }
-          result = await transcribeWithElevenLabs(audioPath, {
-            language,
-            model: (model as 'scribe_v1' | 'scribe_v2') || 'scribe_v1',
-            diarize,
-            numSpeakers,
-          });
-          break;
+        const retryResult = await withRetry(
+          () => transcribeSingle(audioPath, selectedProvider, { language, model, diarize, numSpeakers })
+        );
 
-        default:
-          return {
-            success: false,
-            error: `Provider '${selectedProvider}' is not supported`,
-          };
+        if (!retryResult.success || !retryResult.data) {
+          throw retryResult.error || new Error('Transcription failed after retries');
+        }
+
+        result = retryResult.data;
       }
 
       console.log('[Transcription] Complete, text:', result.text?.substring(0, 100));
@@ -186,7 +249,7 @@ export function registerTranscriptionHandlers(mainWindow: BrowserWindow) {
       // Read file and convert to base64
       const buffer = fs.readFileSync(audioPath);
       const base64 = buffer.toString('base64');
-      
+
       // Determine MIME type from extension
       const ext = path.extname(audioPath).toLowerCase();
       const mimeTypes: Record<string, string> = {
@@ -253,4 +316,116 @@ export function registerTranscriptionHandlers(mainWindow: BrowserWindow) {
       };
     }
   });
+}
+
+/**
+ * Handle chunked transcription for long recordings
+ */
+async function handleChunkedTranscription(
+  mainWindow: BrowserWindow,
+  audioPath: string,
+  totalDurationSec: number,
+  provider: STTProvider,
+  options: { language?: string; model?: string; diarize?: boolean; numSpeakers?: number }
+): Promise<TranscriptionResult> {
+  // Step 1: Split audio into chunks
+  sendProgress(mainWindow, {
+    stage: 'chunking',
+    stageLabel: '오디오 분할 중...',
+    currentChunk: 0,
+    totalChunks: 0,
+    overallProgress: 5,
+  });
+
+  const chunkResult = await audioChunker.splitAudioFile(audioPath, totalDurationSec);
+  const totalChunks = chunkResult.totalChunks;
+
+  console.log(`[Transcription] Split into ${totalChunks} chunks`);
+
+  // Step 2: Transcribe each chunk sequentially with retry
+  const chunkTranscriptions: ChunkTranscription[] = [];
+  let chunkErrors = 0;
+  const startTime = Date.now();
+
+  for (let i = 0; i < chunkResult.chunks.length; i++) {
+    const chunk = chunkResult.chunks[i];
+
+    // Calculate progress
+    const chunkProgress = ((i / totalChunks) * 80) + 10; // 10-90% range
+    const elapsed = Date.now() - startTime;
+    const avgTimePerChunk = i > 0 ? elapsed / i : 0;
+    const remainingChunks = totalChunks - i;
+    const estimatedRemaining = avgTimePerChunk * remainingChunks;
+
+    sendProgress(mainWindow, {
+      stage: 'transcribing',
+      stageLabel: `전사 중... (${i + 1}/${totalChunks} 청크)`,
+      currentChunk: i + 1,
+      totalChunks,
+      overallProgress: Math.round(chunkProgress),
+      estimatedRemainingMs: Math.round(estimatedRemaining),
+      chunkResults: chunkTranscriptions.length,
+      chunkErrors,
+    });
+
+    console.log(`[Transcription] Processing chunk ${i + 1}/${totalChunks} (${chunk.startTime}s - ${chunk.endTime}s)`);
+
+    const retryResult = await withRetry(
+      () => transcribeSingle(chunk.filePath, provider, options)
+    );
+
+    if (retryResult.success && retryResult.data) {
+      chunkTranscriptions.push({
+        chunkIndex: chunk.index,
+        startTime: chunk.startTime,
+        endTime: chunk.endTime,
+        result: retryResult.data,
+      });
+    } else {
+      chunkErrors++;
+      console.error(`[Transcription] Chunk ${i + 1} failed after retries:`, retryResult.error?.message);
+      // Continue with other chunks even if one fails
+    }
+  }
+
+  // Step 3: Merge results
+  sendProgress(mainWindow, {
+    stage: 'merging',
+    stageLabel: '결과 병합 중...',
+    currentChunk: totalChunks,
+    totalChunks,
+    overallProgress: 92,
+    chunkResults: chunkTranscriptions.length,
+    chunkErrors,
+  });
+
+  if (chunkTranscriptions.length === 0) {
+    throw new Error('모든 청크의 전사가 실패했습니다. 네트워크 연결을 확인해주세요.');
+  }
+
+  const mergedResult = transcriptionMerger.merge(chunkTranscriptions);
+
+  // Cleanup chunk files
+  try {
+    await audioChunker.cleanupChunks(chunkResult.chunks);
+  } catch (err) {
+    console.error('[Transcription] Chunk cleanup error:', err);
+  }
+
+  sendProgress(mainWindow, {
+    stage: 'merging',
+    stageLabel: '전사 완료',
+    currentChunk: totalChunks,
+    totalChunks,
+    overallProgress: 100,
+    chunkResults: chunkTranscriptions.length,
+    chunkErrors,
+  });
+
+  // Add metadata about chunking
+  (mergedResult as any).chunked = true;
+  (mergedResult as any).totalChunks = totalChunks;
+  (mergedResult as any).failedChunks = chunkErrors;
+
+  return mergedResult;
 }

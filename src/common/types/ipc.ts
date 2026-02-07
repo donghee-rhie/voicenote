@@ -16,11 +16,13 @@ export const IPC_CHANNELS = {
     PROGRESS: 'transcription:progress',
     COMPLETE: 'transcription:complete',
     ERROR: 'transcription:error',
+    CHUNK_PROGRESS: 'transcription:chunk-progress',
   },
   REFINEMENT: {
     START: 'refinement:start',
     COMPLETE: 'refinement:complete',
     ERROR: 'refinement:error',
+    REFINEMENT_PROGRESS: 'refinement:chunk-progress',
   },
   SESSION: {
     CREATE: 'session:create',
@@ -81,6 +83,7 @@ export interface TranscriptionRequest {
   model?: string;
   diarize?: boolean;
   numSpeakers?: number;
+  recordingDuration?: number; // Duration in seconds, used to determine chunking
 }
 
 export interface TranscriptionSegment {
@@ -151,3 +154,21 @@ export interface LLMModelInfo {
 
 // API Key types
 export type ApiKeyType = 'groq' | 'elevenlabs';
+
+// Processing progress types for long recording support
+export type ProcessingStage = 'chunking' | 'transcribing' | 'merging' | 'refining' | 'summarizing';
+
+export interface ProcessingProgress {
+  stage: ProcessingStage;
+  stageLabel: string;        // Human-readable stage name (Korean)
+  currentChunk: number;      // Current chunk being processed (1-based)
+  totalChunks: number;       // Total number of chunks
+  overallProgress: number;   // 0-100 percentage
+  estimatedRemainingMs?: number;  // Estimated remaining time in ms
+  chunkResults?: number;     // Number of chunks completed successfully
+  chunkErrors?: number;      // Number of chunks that failed
+}
+
+// IPC channel for processing progress
+// Add to IPC_CHANNELS:
+// TRANSCRIPTION.CHUNK_PROGRESS: 'transcription:chunk-progress'

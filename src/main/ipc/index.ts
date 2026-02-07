@@ -8,6 +8,7 @@ import { registerSystemHandlers } from './system-handler';
 import { registerAdminHandlers } from './admin-handler';
 import { registerApiKeyHandlers } from './api-key-handler';
 import { registerWindowHandlers } from './window-handler';
+import { registerStreamingHandlers } from './streaming-handler';
 
 /**
  * Register all IPC handlers
@@ -26,6 +27,7 @@ export function registerAllHandlers(mainWindow: BrowserWindow): void {
   registerTranscriptionHandlers(mainWindow);
   registerRefinementHandlers(mainWindow);
   registerWindowHandlers(mainWindow);
+  registerStreamingHandlers();
 
   console.log('All IPC handlers registered successfully');
 }

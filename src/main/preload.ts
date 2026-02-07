@@ -11,10 +11,16 @@ const ALLOWED_CHANNELS = [
   'transcription:progress',
   'transcription:complete',
   'transcription:error',
+  'transcription:chunk-progress',
   // 텍스트 정제
   'refinement:start',
   'refinement:complete',
   'refinement:error',
+  'refinement:chunk-progress',
+  // 청크 파일 관리
+  'audio:save-streaming-chunk',
+  'audio:recover-chunks',
+  'audio:cleanup-chunks',
   // 세션
   'session:create',
   'session:update',

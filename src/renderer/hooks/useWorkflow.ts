@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useRecording, RecordingMode, UseRecordingOptions } from './useRecording';
 import { useSession } from './useSession';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettings } from '@/contexts/SettingsContext';
 import { IPC_CHANNELS, TranscriptionSegment } from '@common/types/ipc';
+import type { ProcessingProgress } from '@common/types/ipc';
 import { Session, FormatType } from '@common/types/session';
 
 // 시스템 알림 표시 헬퍼
@@ -41,6 +42,7 @@ interface UseWorkflowResult {
   currentFormalText: string | null;
   error: string | null;
   progress: string;
+  processingProgress: ProcessingProgress | null;
   // Recording state
   isRecording: boolean;
   duration: number;
@@ -93,6 +95,36 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
   const [currentFormalText, setCurrentFormalText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string>('');
+  const [processingProgress, setProcessingProgress] = useState<ProcessingProgress | null>(null);
+
+  // Store recording duration for passing to transcription
+  const recordingDurationRef = useRef<number>(0);
+
+  // Listen for chunk progress events from main process
+  useEffect(() => {
+    if (!window.electronAPI) return;
+
+    const unsubTranscription = window.electronAPI.on(
+      IPC_CHANNELS.TRANSCRIPTION.CHUNK_PROGRESS,
+      (data: ProcessingProgress) => {
+        setProcessingProgress(data);
+        setProgress(data.stageLabel);
+      }
+    );
+
+    const unsubRefinement = window.electronAPI.on(
+      IPC_CHANNELS.REFINEMENT.REFINEMENT_PROGRESS,
+      (data: ProcessingProgress) => {
+        setProcessingProgress(data);
+        setProgress(data.stageLabel);
+      }
+    );
+
+    return () => {
+      unsubTranscription?.();
+      unsubRefinement?.();
+    };
+  }, []);
 
   // Internal stop workflow (for auto-stop on max duration)
   const stopWorkflowInternal = useCallback(async () => {
@@ -107,6 +139,9 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
     try {
       // Step 1: Stop recording
       setProgress('녹음을 중지하고 저장합니다...');
+      setProcessingProgress(null);
+      // Capture duration before stopping
+      recordingDurationRef.current = duration;
       const audioPath = await stopRecording();
       
       // 녹음 종료 알림
@@ -134,12 +169,13 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
       
       const transcriptionResult = await window.electronAPI.invoke(
         IPC_CHANNELS.TRANSCRIPTION.START,
-        { 
-          audioPath, 
+        {
+          audioPath,
           language: language.split('-')[0], // 'ko-KR' -> 'ko'
           provider: sttProvider,
           model: sttModel,
           diarize: speakerDiarization,
+          recordingDuration: recordingDurationRef.current,
         }
       );
 
@@ -251,6 +287,7 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
       setCurrentSession(newSession);
       setStatus('complete');
       setProgress('완료!');
+      setProcessingProgress(null);
 
       // 완료 알림 - 정제 완료만 알림 (클립보드 복사 안 함)
       await showNotification('정제 완료', '텍스트 정제 및 요약이 완료되었습니다');
@@ -271,9 +308,10 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
       setError(errorMessage);
       setStatus('error');
       setProgress('');
+      setProcessingProgress(null);
       console.error('Workflow error:', err);
     }
-  }, [user, stopRecording, createSession, settings, options]);
+  }, [user, stopRecording, createSession, settings, options, duration]);
 
   const startWorkflow = useCallback(async () => {
     setError(null);
@@ -281,6 +319,7 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
     setCurrentSegments(null);
     setCurrentRefinedText(null);
     setCurrentFormalText(null);
+    setProcessingProgress(null);
     setProgress('녹음을 시작합니다...');
     setStatus('recording');
 
@@ -315,6 +354,7 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
     setStatus('idle');
     setError(null);
     setProgress('');
+    setProcessingProgress(null);
     setCurrentSession(null);
     setCurrentSegments(null);
     setCurrentRefinedText(null);
@@ -335,6 +375,7 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
     currentFormalText,
     error,
     progress,
+    processingProgress,
     // Recording state
     isRecording,
     duration,
