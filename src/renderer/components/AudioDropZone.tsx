@@ -2,11 +2,9 @@ import React, { useState, useCallback, DragEvent } from 'react';
 import { Music, Upload, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useNotification } from '@/hooks/useNotification';
-import { invokeElectron } from '@/hooks/useElectronAPI';
-import { IPC_CHANNELS } from '@common/types/ipc';
 
 interface AudioDropZoneProps {
-  onFileAccepted?: (audioPath: string, durationSec?: number) => void;
+  onFileAccepted?: (audioPath: string, durationSec: number) => void;
   className?: string;
   disabled?: boolean;
 }
@@ -23,16 +21,12 @@ const ACCEPTED_AUDIO_TYPES = [
   'audio/ogg',
 ];
 
-const ACCEPTED_EXTENSIONS = ['.wav', '.mp3', '.m4a', '.webm', '.ogg'];
+const ACCEPTED_EXTENSIONS = ['.wav', '.mp3', '.m4a', '.webm', '.ogg', '.mp4'];
 
 /**
  * AudioDropZone component for drag-and-drop audio file upload
- * Features:
- * - Visual feedback on drag over
- * - Audio file type validation
- * - Automatic transcription trigger
- * - Loading state management
- * - Error handling with toast notifications
+ * Validates file and passes the native file path + duration to parent.
+ * The parent (RecordingPanel/useWorkflow) handles the full workflow.
  */
 export function AudioDropZone({
   onFileAccepted,
@@ -55,14 +49,13 @@ export function AudioDropZone({
       };
       audio.onerror = () => {
         URL.revokeObjectURL(url);
-        resolve(0); // Fall back to 0 (no chunking)
+        resolve(0);
       };
       audio.src = url;
     });
   }, []);
 
   const validateAudioFile = useCallback((file: File): string | null => {
-    // Check file type
     const isValidType = ACCEPTED_AUDIO_TYPES.includes(file.type);
     const hasValidExtension = ACCEPTED_EXTENSIONS.some(ext =>
       file.name.toLowerCase().endsWith(ext)
@@ -72,20 +65,18 @@ export function AudioDropZone({
       return '지원하지 않는 파일 형식입니다. (.wav, .mp3, .m4a, .webm, .ogg)';
     }
 
-    // Check file size
     const sizeMB = file.size / (1024 * 1024);
     if (sizeMB > MAX_FILE_SIZE_MB) {
       return `파일 크기가 너무 큽니다. (${sizeMB.toFixed(0)}MB, 최대 ${MAX_FILE_SIZE_MB}MB)`;
     }
 
-    return null; // Valid
+    return null;
   }, []);
 
   const handleFile = useCallback(
     async (file: File) => {
       if (disabled || isProcessing) return;
 
-      // Validate file type and size
       const validationError = validateAudioFile(file);
       if (validationError) {
         notification.error('파일 검증 실패', validationError);
@@ -95,10 +86,9 @@ export function AudioDropZone({
       setIsProcessing(true);
 
       try {
-        // Get audio duration for chunking decision
+        // Get audio duration
         const durationSec = await getAudioDuration(file);
-        const durationMin = Math.round(durationSec / 60);
-        console.log(`[AudioDropZone] File: ${file.name}, size: ${(file.size / 1024 / 1024).toFixed(1)}MB, duration: ${durationSec}s (${durationMin}min)`);
+        console.log(`[AudioDropZone] File: ${file.name}, size: ${(file.size / 1024 / 1024).toFixed(1)}MB, duration: ${durationSec}s`);
 
         if (durationSec > 7200) {
           notification.error('파일이 너무 깁니다', '최대 2시간까지의 오디오 파일을 지원합니다.');
@@ -106,43 +96,16 @@ export function AudioDropZone({
           return;
         }
 
-        // Read file as ArrayBuffer and pass directly (memory efficient)
-        const arrayBuffer = await file.arrayBuffer();
-
-        // Save audio blob to file via IPC
-        const saveResult = await invokeElectron<{ success: boolean; data?: { path: string }; error?: string }>(
-          IPC_CHANNELS.AUDIO.SAVE_BLOB,
-          arrayBuffer,
-          file.name
-        );
-
-        if (!saveResult.success || !saveResult.data?.path) {
-          throw new Error(saveResult.error || '파일 저장에 실패했습니다');
+        // In Electron, dropped/selected files have a .path property with the native file path
+        const filePath = (file as any).path as string;
+        if (!filePath) {
+          throw new Error('파일 경로를 가져올 수 없습니다');
         }
 
-        const audioPath = saveResult.data.path;
+        console.log(`[AudioDropZone] Native file path: ${filePath}`);
 
-        // Notify parent component with duration
-        onFileAccepted?.(audioPath, durationSec);
-
-        // Start transcription with duration for chunking
-        const transcriptionResult = await invokeElectron<{ success: boolean; error?: string }>(
-          IPC_CHANNELS.TRANSCRIPTION.START,
-          {
-            audioPath,
-            recordingDuration: durationSec,
-          }
-        );
-
-        if (!transcriptionResult.success) {
-          throw new Error(transcriptionResult.error || '변환 시작에 실패했습니다');
-        }
-
-        if (durationSec > 420) {
-          notification.info('장시간 오디오 변환', `${durationMin}분 분량의 파일을 청크별로 변환합니다...`);
-        } else {
-          notification.info('변환 시작', '오디오 파일을 변환하고 있습니다...');
-        }
+        // Pass to parent for full workflow processing
+        onFileAccepted?.(filePath, durationSec);
       } catch (error) {
         console.error('Audio file processing error:', error);
         notification.error(
@@ -239,10 +202,7 @@ export function AudioDropZone({
           <Loader2 className="h-12 w-12 text-primary animate-spin" />
           <div className="text-center space-y-1">
             <p className="text-sm font-medium text-foreground">
-              파일 처리 중...
-            </p>
-            <p className="text-xs text-muted-foreground">
-              잠시만 기다려주세요
+              파일 확인 중...
             </p>
           </div>
         </div>

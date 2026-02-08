@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import https from 'https';
+import FormData from 'form-data';
 import type { TranscriptionResult, TranscriptionSegment } from '../../common/types/ipc';
 import { getApiKeyWithFallback } from './api-key-service';
 
@@ -113,7 +115,63 @@ function getMimeType(filePath: string): string {
 }
 
 /**
+ * Send multipart form data via https and return parsed JSON response.
+ * Uses form-data package with fs.createReadStream for reliable large file streaming.
+ */
+function postFormData(apiKey: string, formData: FormData): Promise<ElevenLabsResponse> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(ELEVENLABS_API_URL);
+    const reqOptions = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'xi-api-key': apiKey,
+        ...formData.getHeaders(),
+      },
+    };
+
+    const req = https.request(reqOptions, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf-8');
+        console.log('[ElevenLabs STT] Response status:', res.statusCode);
+
+        if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+          console.error('[ElevenLabs STT] API Error:', res.statusCode, body);
+          let errorMessage = `ElevenLabs API error: ${res.statusCode}`;
+          try {
+            const errorJson = JSON.parse(body);
+            errorMessage = errorJson.detail?.message || errorJson.detail || errorJson.message || errorMessage;
+          } catch {
+            errorMessage = body || errorMessage;
+          }
+          return reject(new Error(errorMessage));
+        }
+
+        try {
+          const data = JSON.parse(body) as ElevenLabsResponse;
+          resolve(data);
+        } catch (parseErr) {
+          reject(new Error(`Failed to parse ElevenLabs response: ${body.substring(0, 200)}`));
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      reject(new Error(`Network request failed: ${err.message}`));
+    });
+
+    // Stream the form data (including large audio file) to the request
+    formData.pipe(req);
+  });
+}
+
+/**
  * Transcribe audio using ElevenLabs Scribe API
+ * Uses streaming upload via form-data package for reliable large file handling.
  */
 export async function transcribeWithElevenLabs(
   audioPath: string,
@@ -127,21 +185,20 @@ export async function transcribeWithElevenLabs(
       throw new Error(`Audio file not found: ${audioPath}`);
     }
 
-    // Read file as buffer
-    const fileBuffer = fs.readFileSync(audioPath);
     const fileName = path.basename(audioPath);
     const mimeType = getMimeType(audioPath);
+    const fileStat = fs.statSync(audioPath);
 
-    // Create form data using Node.js built-in FormData (available in Node 18+)
+    // Build multipart form using form-data package with streaming
     const formData = new FormData();
-    
-    // Create Blob from buffer
-    const fileBlob = new Blob([fileBuffer], { type: mimeType });
-    formData.append('file', fileBlob, fileName);
+    formData.append('file', fs.createReadStream(audioPath), {
+      filename: fileName,
+      contentType: mimeType,
+      knownLength: fileStat.size,
+    });
     formData.append('model_id', options.model || 'scribe_v1');
-    
+
     if (options.language) {
-      // ElevenLabs uses language codes like 'ko', 'en', 'ja'
       const langCode = options.language.split('-')[0].toLowerCase();
       formData.append('language_code', langCode);
     }
@@ -159,33 +216,10 @@ export async function transcribeWithElevenLabs(
       formData.append('tag_audio_events', 'true');
     }
 
-    console.log(`[ElevenLabs STT] Sending file: ${fileName}, size: ${fileBuffer.length}, type: ${mimeType}, model: ${options.model}, diarize: ${options.diarize}`);
+    console.log(`[ElevenLabs STT] Streaming file: ${fileName}, size: ${fileStat.size} bytes (${(fileStat.size / 1024 / 1024).toFixed(1)}MB), type: ${mimeType}, model: ${options.model}, diarize: ${options.diarize}`);
 
-    // Make API request
-    const response = await fetch(ELEVENLABS_API_URL, {
-      method: 'POST',
-      headers: {
-        'xi-api-key': apiKey,
-      },
-      body: formData,
-    });
+    const data = await postFormData(apiKey, formData);
 
-    console.log('[ElevenLabs STT] Response status:', response.status);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[ElevenLabs STT] API Error:', response.status, errorText);
-      let errorMessage = `ElevenLabs API error: ${response.status}`;
-      try {
-        const errorJson = JSON.parse(errorText);
-        errorMessage = errorJson.detail?.message || errorJson.detail || errorJson.message || errorMessage;
-      } catch {
-        errorMessage = errorText || errorMessage;
-      }
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json() as ElevenLabsResponse;
     console.log('[ElevenLabs STT] Transcription result:', data.text?.substring(0, 100), '...');
     console.log('[ElevenLabs STT] Words count:', data.words?.length || 0);
     if (data.words && data.words.length > 0) {

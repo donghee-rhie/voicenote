@@ -36,6 +36,7 @@ interface UseWorkflowResult {
   startWorkflow: () => Promise<void>;
   stopWorkflow: () => Promise<void>;
   cancelWorkflow: () => void;
+  processAudioFile: (audioPath: string, durationSec: number) => Promise<void>;
   currentSession: Session | null;
   currentSegments: TranscriptionSegment[] | null;
   currentRefinedText: string | null;
@@ -157,15 +158,24 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
       const formatType = settings?.pasteFormat || 'FORMATTED';
       // ElevenLabs scribe_v2는 화자 분리 기본 활성화
       const speakerDiarization = settings?.speakerDiarization ?? (sttProvider === 'elevenlabs');
-      const sttModel = settings?.sttModel || (sttProvider === 'groq' ? 'whisper-large-v3-turbo' : 'scribe_v2');
       const refineModel = settings?.refineModel || 'openai/gpt-oss-120b';
+
+      // Ensure model is valid for the selected provider
+      const groqModels = ['whisper-large-v3', 'whisper-large-v3-turbo', 'distil-whisper-large-v3-en'];
+      const elevenlabsModels = ['scribe_v1', 'scribe_v2'];
+      let sttModel: string;
+      if (sttProvider === 'elevenlabs') {
+        sttModel = (settings?.sttModel && elevenlabsModels.includes(settings.sttModel)) ? settings.sttModel : 'scribe_v2';
+      } else {
+        sttModel = (settings?.sttModel && groqModels.includes(settings.sttModel)) ? settings.sttModel : 'whisper-large-v3-turbo';
+      }
 
       // Step 2: Transcribe
       setStatus('transcribing');
       setProgress('음성을 텍스트로 변환 중...');
       await showNotification('전사 시작', '음성을 텍스트로 변환합니다...');
 
-      console.log('[Workflow] Calling transcription with:', { audioPath, language: language.split('-')[0], provider: sttProvider, model: sttModel });
+      console.log('[Workflow] Calling transcription with:', { audioPath, language: language.split('-')[0], provider: sttProvider, model: sttModel, diarize: speakerDiarization, settingsProvider: settings?.preferredSTTProvider, settingsModel: settings?.sttModel });
       
       const transcriptionResult = await window.electronAPI.invoke(
         IPC_CHANNELS.TRANSCRIPTION.START,
@@ -364,11 +374,137 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
     }
   }, [isRecording, cancelRecording]);
 
+  // Process an uploaded audio file through the full workflow (transcribe → refine → save)
+  const processAudioFile = useCallback(async (audioPath: string, durationSec: number) => {
+    if (!user) {
+      setError('사용자 정보를 찾을 수 없습니다');
+      setStatus('error');
+      return;
+    }
+
+    setError(null);
+    setCurrentSession(null);
+    setCurrentSegments(null);
+    setCurrentRefinedText(null);
+    setCurrentFormalText(null);
+    setProcessingProgress(null);
+
+    try {
+      const sttProvider = settings?.preferredSTTProvider === 'elevenlabs' ? 'elevenlabs' : 'groq';
+      const language = settings?.preferredLanguage || 'ko-KR';
+      const formatType = settings?.pasteFormat || 'FORMATTED';
+      const speakerDiarization = settings?.speakerDiarization ?? (sttProvider === 'elevenlabs');
+      const refineModel = settings?.refineModel || 'openai/gpt-oss-120b';
+
+      // Ensure model is valid for the selected provider
+      const groqModels = ['whisper-large-v3', 'whisper-large-v3-turbo', 'distil-whisper-large-v3-en'];
+      const elevenlabsModels = ['scribe_v1', 'scribe_v2'];
+      let sttModel: string;
+      if (sttProvider === 'elevenlabs') {
+        sttModel = (settings?.sttModel && elevenlabsModels.includes(settings.sttModel)) ? settings.sttModel : 'scribe_v2';
+      } else {
+        sttModel = (settings?.sttModel && groqModels.includes(settings.sttModel)) ? settings.sttModel : 'whisper-large-v3-turbo';
+      }
+
+      // Step 1: Transcribe
+      setStatus('transcribing');
+      setProgress('음성을 텍스트로 변환 중...');
+
+      console.log('[Workflow] Processing uploaded file:', { audioPath, durationSec, provider: sttProvider, model: sttModel, diarize: speakerDiarization, settingsProvider: settings?.preferredSTTProvider, settingsModel: settings?.sttModel });
+
+      const transcriptionResult = await window.electronAPI.invoke(
+        IPC_CHANNELS.TRANSCRIPTION.START,
+        {
+          audioPath,
+          language: language.split('-')[0],
+          provider: sttProvider,
+          model: sttModel,
+          diarize: speakerDiarization,
+          recordingDuration: durationSec,
+        }
+      );
+
+      if (!transcriptionResult.success) {
+        throw new Error(transcriptionResult.error || '전사 요청이 실패했습니다');
+      }
+
+      if (!transcriptionResult.data?.text) {
+        throw new Error('전사 결과가 비어있습니다.');
+      }
+
+      const originalText = transcriptionResult.data.text;
+      const segments = transcriptionResult.data.segments as TranscriptionSegment[] | undefined;
+      console.log('[Workflow] Transcription complete:', originalText.substring(0, 100));
+
+      if (segments && segments.length > 0) {
+        setCurrentSegments(segments);
+      }
+
+      // Step 2: Refine
+      setStatus('refining');
+      setProgress('텍스트를 정제하고 요약 중...');
+
+      const refinementResult = await window.electronAPI.invoke(
+        IPC_CHANNELS.REFINEMENT.START,
+        {
+          text: originalText,
+          formatType,
+          language: language.split('-')[0],
+          refineModel,
+        }
+      );
+
+      if (!refinementResult.success || !refinementResult.data) {
+        throw new Error(refinementResult.error || '정제에 실패했습니다');
+      }
+
+      const refinedText = refinementResult.data.text;
+      const formalText = refinementResult.data.formalText;
+      const summary = refinementResult.data.summary;
+
+      setCurrentRefinedText(refinedText || null);
+      setCurrentFormalText(formalText || null);
+
+      // Step 3: Create session
+      setStatus('saving');
+      setProgress('세션을 저장 중...');
+
+      const newSession = await createSession({
+        userId: user.id,
+        originalText,
+        refinedText: formalText || refinedText,
+        summary,
+        audioPath,
+        language: language.split('-')[0],
+        formatType: formatType as FormatType,
+      });
+
+      if (!newSession) {
+        throw new Error('세션 저장에 실패했습니다');
+      }
+
+      setCurrentSession(newSession);
+      setStatus('complete');
+      setProgress('완료!');
+      setProcessingProgress(null);
+
+      await showNotification('파일 처리 완료', '전사 및 정제가 완료되었습니다');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : '파일 처리 실패';
+      setError(errorMessage);
+      setStatus('error');
+      setProgress('');
+      setProcessingProgress(null);
+      console.error('[Workflow] processAudioFile error:', err);
+    }
+  }, [user, createSession, settings]);
+
   return {
     status,
     startWorkflow,
     stopWorkflow,
     cancelWorkflow: cancelWorkflowFn,
+    processAudioFile,
     currentSession,
     currentSegments,
     currentRefinedText,

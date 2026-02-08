@@ -135,6 +135,7 @@ export function RecordingPanel({ onRecordingComplete, onRecordingStart, classNam
     startWorkflow,
     stopWorkflow,
     cancelWorkflow,
+    processAudioFile,
     currentSession,
     currentSegments,
     currentRefinedText,
@@ -325,7 +326,7 @@ export function RecordingPanel({ onRecordingComplete, onRecordingStart, classNam
           {/* Audio Drop Zone */}
           {!isRecording && !isProcessing && (status === 'idle' || status === 'complete') && (
             <div className="border-t pt-6">
-              <AudioDropZone />
+              <AudioDropZone onFileAccepted={processAudioFile} />
             </div>
           )}
         </div>

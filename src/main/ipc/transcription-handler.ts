@@ -27,6 +27,9 @@ function sendProgress(mainWindow: BrowserWindow, progress: ProcessingProgress) {
   mainWindow.webContents.send(IPC_CHANNELS.TRANSCRIPTION.CHUNK_PROGRESS, progress);
 }
 
+const GROQ_MODELS = ['whisper-large-v3', 'whisper-large-v3-turbo', 'distil-whisper-large-v3-en'];
+const ELEVENLABS_MODELS = ['scribe_v1', 'scribe_v2'];
+
 /**
  * Transcribe a single audio file with the selected provider (with retry)
  */
@@ -38,20 +41,31 @@ async function transcribeSingle(
   const { language, model, diarize, numSpeakers } = options;
 
   switch (provider) {
-    case 'groq':
+    case 'groq': {
+      const groqModel = (model && GROQ_MODELS.includes(model)) ? model : 'whisper-large-v3-turbo';
+      if (model && !GROQ_MODELS.includes(model)) {
+        console.warn(`[Transcription] Model '${model}' is not a valid Groq model, using '${groqModel}'`);
+      }
       return transcribeWithGroq(audioPath, {
         language,
-        model: (model as 'whisper-large-v3' | 'whisper-large-v3-turbo' | 'distil-whisper-large-v3-en') || 'whisper-large-v3-turbo',
+        model: groqModel as 'whisper-large-v3' | 'whisper-large-v3-turbo' | 'distil-whisper-large-v3-en',
         response_format: 'verbose_json',
       });
+    }
 
-    case 'elevenlabs':
+    case 'elevenlabs': {
+      const elModel = (model && ELEVENLABS_MODELS.includes(model)) ? model : 'scribe_v2';
+      if (model && !ELEVENLABS_MODELS.includes(model)) {
+        console.warn(`[Transcription] Model '${model}' is not a valid ElevenLabs model, using '${elModel}'`);
+      }
+      console.log(`[Transcription] ElevenLabs: model=${elModel}, diarize=${diarize}, numSpeakers=${numSpeakers}`);
       return transcribeWithElevenLabs(audioPath, {
         language,
-        model: (model as 'scribe_v1' | 'scribe_v2') || 'scribe_v1',
-        diarize,
+        model: elModel as 'scribe_v1' | 'scribe_v2',
+        diarize: diarize ?? true, // Default to true for ElevenLabs
         numSpeakers,
       });
+    }
 
     default:
       throw new Error(`Provider '${provider}' is not supported`);
@@ -84,6 +98,7 @@ export function registerTranscriptionHandlers(mainWindow: BrowserWindow) {
 
       // Route to appropriate provider
       const selectedProvider = provider || 'groq';
+      console.log(`[Transcription] Request: provider=${provider}, selectedProvider=${selectedProvider}, model=${model}, diarize=${diarize}, duration=${recordingDuration}`);
 
       // Validate provider configuration
       if (selectedProvider === 'groq' && !isGroqConfigured()) {
