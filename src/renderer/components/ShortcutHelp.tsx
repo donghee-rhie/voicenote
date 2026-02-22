@@ -23,6 +23,16 @@ const shortcuts = [
     category: '녹음',
   },
   {
+    keys: isMac ? ['Cmd', 'Shift', 'T'] : ['Ctrl', 'Shift', 'T'],
+    description: '번역 모드 녹음 시작/중지',
+    category: '녹음',
+  },
+  {
+    keys: isMac ? ['Cmd', 'Shift', 'M'] : ['Ctrl', 'Shift', 'M'],
+    description: '구조화 정리 모드 녹음 시작/중지',
+    category: '녹음',
+  },
+  {
     keys: isMac ? ['Cmd', 'Shift', 'C'] : ['Ctrl', 'Shift', 'C'],
     description: '마지막 텍스트 복사',
     category: '편집',

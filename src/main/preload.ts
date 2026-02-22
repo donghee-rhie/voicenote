@@ -64,8 +64,22 @@ const ALLOWED_CHANNELS = [
   'workflow:status',
   'workflow:complete',
   'workflow:error',
+  // 번역
+  'translation:start',
+  'translation:complete',
+  'translation:error',
+  'translation:chunk-progress',
+  // 회의록
+  'minutes:start',
+  'minutes:complete',
+  'minutes:error',
+  'minutes:chunk-progress',
+  // 모델 페칭
+  'models:fetch',
   // 단축키
   'shortcut:recording-toggle',
+  'shortcut:translation-toggle',
+  'shortcut:minutes-toggle',
   'shortcut:paste-from-clipboard',
   // 네비게이션
   'nav:settings',

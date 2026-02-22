@@ -5,6 +5,7 @@ import { app } from 'electron';
 import { transcribeAudio } from '../services/stt-service';
 import { transcribeWithGroq, isGroqConfigured } from '../services/groq-stt-service';
 import { transcribeWithElevenLabs, isElevenLabsConfigured } from '../services/elevenlabs-stt-service';
+import { transcribeWithFireworks, isFireworksConfigured } from '../services/fireworks-stt-service';
 import { AudioChunker } from '../services/audio-chunker';
 import { TranscriptionMerger, ChunkTranscription } from '../services/transcription-merger';
 import { withRetry } from '../services/retry-handler';
@@ -29,6 +30,7 @@ function sendProgress(mainWindow: BrowserWindow, progress: ProcessingProgress) {
 
 const GROQ_MODELS = ['whisper-large-v3', 'whisper-large-v3-turbo', 'distil-whisper-large-v3-en'];
 const ELEVENLABS_MODELS = ['scribe_v1', 'scribe_v2'];
+const FIREWORKS_MODELS = ['whisper-v3', 'whisper-v3-turbo'];
 
 /**
  * Transcribe a single audio file with the selected provider (with retry)
@@ -64,6 +66,19 @@ async function transcribeSingle(
         model: elModel as 'scribe_v1' | 'scribe_v2',
         diarize: diarize ?? true, // Default to true for ElevenLabs
         numSpeakers,
+      });
+    }
+
+    case 'fireworks': {
+      const fwModel = (model && FIREWORKS_MODELS.includes(model)) ? model : 'whisper-v3-turbo';
+      if (model && !FIREWORKS_MODELS.includes(model)) {
+        console.warn(`[Transcription] Model '${model}' is not a valid Fireworks model, using '${fwModel}'`);
+      }
+      console.log(`[Transcription] Fireworks: model=${fwModel}`);
+      return transcribeWithFireworks(audioPath, {
+        language,
+        model: fwModel as 'whisper-v3' | 'whisper-v3-turbo',
+        response_format: 'verbose_json',
       });
     }
 
@@ -111,6 +126,12 @@ export function registerTranscriptionHandlers(mainWindow: BrowserWindow) {
         return {
           success: false,
           error: 'ElevenLabs API 키가 설정되지 않았습니다. 설정에서 API 키를 입력해주세요.',
+        };
+      }
+      if (selectedProvider === 'fireworks' && !isFireworksConfigured()) {
+        return {
+          success: false,
+          error: 'Fireworks API 키가 설정되지 않았습니다. 설정에서 API 키를 입력해주세요.',
         };
       }
 

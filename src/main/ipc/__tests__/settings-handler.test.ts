@@ -48,6 +48,12 @@ const mockUserSettings = {
   refineModel: 'llama-3.3-70b-versatile',
   maxRecordingDuration: 300,
   autoCopyOnComplete: false,
+  preferredLLMProvider: 'groq',
+  translationTargetLanguage: 'en',
+  translationLLMProvider: '',
+  translationModel: '',
+  minutesLLMProvider: '',
+  minutesModel: '',
   createdAt: new Date('2025-01-01'),
   updatedAt: new Date('2025-01-01'),
 };

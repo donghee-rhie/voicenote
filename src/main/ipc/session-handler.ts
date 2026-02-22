@@ -81,8 +81,9 @@ export function registerSessionHandlers() {
   });
 
   // Update session
-  ipcMain.handle(IPC_CHANNELS.SESSION.UPDATE, async (_event, id: string, data: UpdateSessionData) => {
+  ipcMain.handle(IPC_CHANNELS.SESSION.UPDATE, async (_event, payload: { id: string } & UpdateSessionData) => {
     try {
+      const { id, ...data } = payload;
       if (!id) {
         return {
           success: false,

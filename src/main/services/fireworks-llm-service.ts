@@ -1,56 +1,51 @@
-import Groq from 'groq-sdk';
+import OpenAI from 'openai';
 import type { RefinementResult } from '../../common/types/ipc';
 import { getApiKeyWithFallback } from './api-key-service';
 import { stripThinkingTags } from './llm-utils';
 
-let groqClient: Groq | null = null;
+let fireworksClient: OpenAI | null = null;
 
-export type GroqLLMModel = 
-  | 'llama-3.3-70b-versatile'
-  | 'llama-3.1-8b-instant'
-  | 'llama3-70b-8192'
-  | 'llama3-8b-8192'
-  | 'mixtral-8x7b-32768'
-  | 'gemma2-9b-it'
-  | 'openai/gpt-oss-120b'
-  | 'openai/gpt-oss-20b';
+export type FireworksLLMModel = string; // Accept any model ID
 
-export interface GroqRefinementOptions {
+export interface FireworksRefinementOptions {
   language?: string;
   formatType?: string;
-  refineModel?: GroqLLMModel;
-  classifierModel?: GroqLLMModel;
+  refineModel?: FireworksLLMModel;
+  classifierModel?: FireworksLLMModel;
   generateSummary?: boolean;
   generateFormal?: boolean;
 }
 
 /**
- * Get Groq API key from store or environment
+ * Get Fireworks API key from store or environment
  */
 function getApiKey(): string {
-  const apiKey = getApiKeyWithFallback('groq');
+  const apiKey = getApiKeyWithFallback('fireworks');
   if (!apiKey) {
-    throw new Error('Groq API key is not set. Please configure it in Settings.');
+    throw new Error('Fireworks API key is not set. Please configure it in Settings.');
   }
   return apiKey;
 }
 
 /**
- * Initialize or get Groq client
+ * Initialize or get Fireworks client
  */
-export function getGroqClient(): Groq {
-  if (!groqClient) {
+export function getFireworksClient(): OpenAI {
+  if (!fireworksClient) {
     const apiKey = getApiKey();
-    groqClient = new Groq({ apiKey });
+    fireworksClient = new OpenAI({
+      apiKey,
+      baseURL: 'https://api.fireworks.ai/inference/v1'
+    });
   }
-  return groqClient;
+  return fireworksClient;
 }
 
 /**
  * Reset client (useful when API key changes)
  */
-export function resetGroqRefinementClient(): void {
-  groqClient = null;
+export function resetFireworksClient(): void {
+  fireworksClient = null;
 }
 
 /**
@@ -58,8 +53,8 @@ export function resetGroqRefinementClient(): void {
  * 정제: 구조를 크게 바꾸지 않으며, 전사 오류만 간단히 수정
  */
 function getRefineSystemPrompt(formatType?: string, language?: string): string {
-  const langInstruction = language === 'ko' || language === 'ko-KR' 
-    ? '한국어로 응답해주세요.' 
+  const langInstruction = language === 'ko' || language === 'ko-KR'
+    ? '한국어로 응답해주세요.'
     : '';
 
   return `[시스템 역할] 음성 전사 텍스트 교정기
@@ -91,8 +86,8 @@ ${langInstruction}`;
  * 요약: 내용 유지하되 일목요연하고 포멀하게 정리
  */
 function getFormalSystemPrompt(language?: string): string {
-  const langInstruction = language === 'ko' || language === 'ko-KR' 
-    ? '한국어로 응답해주세요.' 
+  const langInstruction = language === 'ko' || language === 'ko-KR'
+    ? '한국어로 응답해주세요.'
     : '';
 
   return `[시스템 역할] 음성 전사 텍스트 요약기
@@ -124,8 +119,8 @@ ${langInstruction}`;
  * Get system prompt for summarization
  */
 function getSummarySystemPrompt(language?: string): string {
-  const langInstruction = language === 'ko' || language === 'ko-KR' 
-    ? '한국어로 응답해주세요.' 
+  const langInstruction = language === 'ko' || language === 'ko-KR'
+    ? '한국어로 응답해주세요.'
     : '';
 
   return `당신은 텍스트 요약 전문가입니다.
@@ -134,38 +129,23 @@ ${langInstruction}`;
 }
 
 /**
- * Classifier prompt to determine if formal/itemized format is appropriate
+ * Refine text using Fireworks LLM
  */
-function getClassifierSystemPrompt(): string {
-  return `당신은 텍스트 분류 전문가입니다.
-주어진 텍스트가 항목화(불릿 포인트 형식)로 정리하기에 적합한지 판단해주세요.
-
-적합한 경우: 회의록, 지시사항, 할 일 목록, 절차 설명, 요점 정리가 필요한 내용
-부적합한 경우: 대화, 이야기, 감정 표현, 서술적 내용
-
-JSON 형식으로만 응답해주세요:
-{"suitable": true} 또는 {"suitable": false}`;
-}
-
-/**
- * Refine text using Groq LLM
- */
-export async function refineWithGroq(
+export async function refineWithFireworks(
   text: string,
-  options: GroqRefinementOptions = {}
+  options: FireworksRefinementOptions = {}
 ): Promise<RefinementResult> {
   try {
-    const client = getGroqClient();
+    const client = getFireworksClient();
 
     if (!text || text.trim().length === 0) {
       throw new Error('Text is empty');
     }
 
-    const refineModel = options.refineModel || 'openai/gpt-oss-120b';
-    const classifierModel = options.classifierModel || 'llama-3.1-8b-instant';
+    const refineModel = options.refineModel || 'accounts/fireworks/models/gpt-oss-120b';
     const language = options.language;
 
-    console.log('[Groq Refinement] Using model:', refineModel, 'classifier:', classifierModel);
+    console.log('[Fireworks Refinement] Using model:', refineModel);
 
     // Step 1: Refine the text
     const refinePrompt = getRefineSystemPrompt(options.formatType, language);
@@ -191,7 +171,7 @@ export async function refineWithGroq(
     // Step 2: Generate formal/summary text if requested
     // 항상 생성 (classifier 무시 - 요약은 항상 유용함)
     if (options.generateFormal) {
-      console.log('[Groq Refinement] Generating formal/summary text...');
+      console.log('[Fireworks Refinement] Generating formal/summary text...');
       const formalPrompt = getFormalSystemPrompt(language);
       const formalResponse = await client.chat.completions.create({
         model: refineModel,
@@ -204,7 +184,7 @@ export async function refineWithGroq(
       });
 
       result.formalText = stripThinkingTags(formalResponse.choices[0]?.message?.content || '') || undefined;
-      console.log('[Groq Refinement] formalText generated:', result.formalText?.substring(0, 50));
+      console.log('[Fireworks Refinement] formalText generated:', result.formalText?.substring(0, 50));
     }
 
     // Step 3: Generate summary if requested
@@ -228,21 +208,21 @@ export async function refineWithGroq(
     if (error instanceof Error) {
       // Check for specific error types
       if (error.message.includes('401')) {
-        throw new Error('Groq API 인증 실패. API 키를 확인해주세요.');
+        throw new Error('Fireworks API 인증 실패. API 키를 확인해주세요.');
       }
       if (error.message.includes('429')) {
-        throw new Error('Groq API 요청 한도 초과. 잠시 후 다시 시도해주세요.');
+        throw new Error('Fireworks API 요청 한도 초과. 잠시 후 다시 시도해주세요.');
       }
-      throw new Error(`Groq Refinement failed: ${error.message}`);
+      throw new Error(`Fireworks Refinement failed: ${error.message}`);
     }
-    throw new Error('Groq Refinement failed: Unknown error');
+    throw new Error('Fireworks Refinement failed: Unknown error');
   }
 }
 
 /**
- * Check if Groq API key is configured
+ * Check if Fireworks API key is configured
  */
-export function isGroqRefinementConfigured(): boolean {
+export function isFireworksLLMConfigured(): boolean {
   try {
     getApiKey();
     return true;
@@ -252,55 +232,61 @@ export function isGroqRefinementConfigured(): boolean {
 }
 
 /**
- * Available Groq LLM models for refinement
+ * Available Fireworks LLM models for refinement
  */
-export const GROQ_LLM_MODELS = [
+export const FIREWORKS_LLM_MODELS = [
   {
-    id: 'openai/gpt-oss-120b',
+    id: 'accounts/fireworks/models/gpt-oss-120b',
     name: 'GPT-OSS 120B',
-    description: 'OpenAI 호환 최대 모델 (최고 품질)',
+    description: '128k 컨텍스트, 고성능 (권장)',
     recommended: true,
   },
   {
-    id: 'openai/gpt-oss-20b',
+    id: 'accounts/fireworks/models/gpt-oss-20b',
     name: 'GPT-OSS 20B',
-    description: 'OpenAI 호환 경량 모델 (빠른 속도)',
+    description: '128k 컨텍스트, 경량 (빠름)',
     recommended: false,
   },
   {
-    id: 'llama-3.3-70b-versatile',
-    name: 'Llama 3.3 70B Versatile',
-    description: '가장 강력하고 다목적 모델',
+    id: 'accounts/fireworks/models/deepseek-v3p2',
+    name: 'DeepSeek V3.2',
+    description: '최신 추론 모델',
     recommended: false,
   },
   {
-    id: 'llama-3.1-8b-instant',
-    name: 'Llama 3.1 8B Instant',
-    description: '빠른 응답, 간단한 작업에 적합',
+    id: 'accounts/fireworks/models/glm-4p7',
+    name: 'GLM-4.7',
+    description: '고성능 대규모 모델',
     recommended: false,
   },
   {
-    id: 'llama3-70b-8192',
-    name: 'Llama 3 70B',
-    description: '높은 품질, 긴 컨텍스트 지원',
+    id: 'accounts/fireworks/models/kimi-k2p5',
+    name: 'Kimi K2.5',
+    description: '멀티모달, 고성능',
     recommended: false,
   },
   {
-    id: 'llama3-8b-8192',
-    name: 'Llama 3 8B',
-    description: '빠르고 효율적인 소형 모델',
+    id: 'accounts/fireworks/models/qwen2p5-72b-instruct',
+    name: 'Qwen 2.5 72B',
+    description: '범용 Instruct',
     recommended: false,
   },
   {
-    id: 'mixtral-8x7b-32768',
-    name: 'Mixtral 8x7B',
-    description: 'MoE 아키텍처, 긴 컨텍스트',
+    id: 'accounts/fireworks/models/llama-v3p3-70b-instruct',
+    name: 'Llama 3.3 70B',
+    description: '강력한 범용 모델',
     recommended: false,
   },
   {
-    id: 'gemma2-9b-it',
-    name: 'Gemma 2 9B IT',
-    description: 'Google의 경량 고성능 모델',
+    id: 'accounts/fireworks/models/qwen3-8b',
+    name: 'Qwen3 8B',
+    description: '경량 고성능',
+    recommended: false,
+  },
+  {
+    id: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+    name: 'Llama 3.1 8B',
+    description: '경량 (초고속)',
     recommended: false,
   },
 ] as const;

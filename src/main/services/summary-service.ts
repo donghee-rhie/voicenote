@@ -1,7 +1,14 @@
 import Groq from 'groq-sdk';
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { getApiKeyWithFallback } from './api-key-service';
+import { stripThinkingTags } from './llm-utils';
+import { openaiGenerate } from './openai-api';
+import type { LLMProvider } from '../../common/types/ipc';
 
 let groqClient: Groq | null = null;
+let fireworksClient: OpenAI | null = null;
+let anthropicClient: Anthropic | null = null;
 
 /**
  * Get or create Groq client
@@ -18,10 +25,43 @@ function getGroqClient(): Groq {
 }
 
 /**
+ * Get or create Fireworks client (OpenAI-compatible)
+ */
+function getFireworksClient(): OpenAI {
+  if (!fireworksClient) {
+    const apiKey = getApiKeyWithFallback('fireworks');
+    if (!apiKey) {
+      throw new Error('Fireworks API key is not set.');
+    }
+    fireworksClient = new OpenAI({
+      apiKey,
+      baseURL: 'https://api.fireworks.ai/inference/v1',
+    });
+  }
+  return fireworksClient;
+}
+
+/**
+ * Get or create Anthropic client
+ */
+function getAnthropicClient(): Anthropic {
+  if (!anthropicClient) {
+    const apiKey = getApiKeyWithFallback('anthropic');
+    if (!apiKey) {
+      throw new Error('Anthropic API key is not set.');
+    }
+    anthropicClient = new Anthropic({ apiKey });
+  }
+  return anthropicClient;
+}
+
+/**
  * Reset client (when API key changes)
  */
 export function resetSummaryClient(): void {
   groqClient = null;
+  fireworksClient = null;
+  anthropicClient = null;
 }
 
 /**
@@ -34,10 +74,17 @@ export async function generateSummary(
     language?: string;
     model?: string;
     maxTokens?: number;
+    llmProvider?: LLMProvider;
   } = {}
 ): Promise<string> {
-  const client = getGroqClient();
-  const model = options.model || 'openai/gpt-oss-120b';
+  const provider = options.llmProvider || 'groq';
+  const defaultModels: Record<LLMProvider, string> = {
+    groq: 'openai/gpt-oss-120b',
+    fireworks: 'accounts/fireworks/models/gpt-oss-120b',
+    openai: 'gpt-4o',
+    anthropic: 'claude-sonnet-4-6',
+  };
+  const model = options.model || defaultModels[provider];
   const language = options.language || 'ko';
 
   const langInstruction = language === 'ko' || language === 'ko-KR'
@@ -56,15 +103,42 @@ export async function generateSummary(
 마크다운 기호(*, -, #, ** 등)를 사용하지 마세요.
 ${langInstruction}`;
 
-  const response = await client.chat.completions.create({
-    model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: inputText },
-    ],
-    temperature: 0.7,
-    max_tokens: options.maxTokens || 500,
-  });
+  const maxTokens = options.maxTokens || 500;
 
-  return response.choices[0]?.message?.content || '';
+  if (provider === 'anthropic') {
+    const client = getAnthropicClient();
+    const response = await client.messages.create({
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [
+        { role: 'user', content: inputText },
+      ],
+    });
+    const resultText = response.content[0]?.type === 'text' ? response.content[0].text : '';
+    return stripThinkingTags(resultText);
+  }
+
+  const chatMessages = [
+    { role: 'system' as const, content: systemPrompt },
+    { role: 'user' as const, content: inputText },
+  ];
+
+  if (provider === 'fireworks') {
+    const client = getFireworksClient();
+    const response = await client.chat.completions.create({ model, messages: chatMessages, temperature: 0.7, max_tokens: maxTokens });
+    return stripThinkingTags(response.choices[0]?.message?.content || '');
+  } else if (provider === 'openai') {
+    const response = await openaiGenerate({
+      model,
+      system: systemPrompt,
+      input: inputText,
+      max_new_tokens: maxTokens,
+    });
+    return response.text;
+  } else {
+    const client = getGroqClient();
+    const response = await client.chat.completions.create({ model, messages: chatMessages, temperature: 0.7, max_tokens: maxTokens });
+    return stripThinkingTags(response.choices[0]?.message?.content || '');
+  }
 }

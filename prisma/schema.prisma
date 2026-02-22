@@ -40,6 +40,8 @@ model Session {
   language     String  @default("ko-KR")
   provider     String?
   model        String?
+  llmProvider  String?
+  llmModel     String?
   formatType   String  @default("DEFAULT")
   status       String  @default("DRAFT")
   tags         String?
@@ -66,9 +68,16 @@ model UserSettings {
   autoSaveInterval     Int     @default(5000)
   sttModel             String  @default("whisper-large-v3-turbo")
   refineModel          String  @default("llama-3.3-70b-versatile")
+  preferredLLMProvider String  @default("groq")
   // Recording settings
   maxRecordingDuration Int     @default(300)
   autoCopyOnComplete   Boolean @default(false)
+  // Translation & Minutes settings
+  translationTargetLanguage String @default("en")
+  translationLLMProvider    String @default("")
+  translationModel          String @default("")
+  minutesLLMProvider        String @default("")
+  minutesModel              String @default("")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

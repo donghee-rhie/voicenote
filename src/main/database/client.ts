@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS "Session" (
     "language" TEXT NOT NULL DEFAULT 'ko-KR',
     "provider" TEXT,
     "model" TEXT,
+    "llmProvider" TEXT,
+    "llmModel" TEXT,
     "formatType" TEXT NOT NULL DEFAULT 'DEFAULT',
     "status" TEXT NOT NULL DEFAULT 'DRAFT',
     "tags" TEXT,
@@ -70,6 +72,12 @@ CREATE TABLE IF NOT EXISTS "UserSettings" (
     "refineModel" TEXT NOT NULL DEFAULT 'llama-3.3-70b-versatile',
     "maxRecordingDuration" INTEGER NOT NULL DEFAULT 300,
     "autoCopyOnComplete" BOOLEAN NOT NULL DEFAULT false,
+    "preferredLLMProvider" TEXT NOT NULL DEFAULT 'groq',
+    "translationTargetLanguage" TEXT NOT NULL DEFAULT 'en',
+    "translationLLMProvider" TEXT NOT NULL DEFAULT '',
+    "translationModel" TEXT NOT NULL DEFAULT '',
+    "minutesLLMProvider" TEXT NOT NULL DEFAULT '',
+    "minutesModel" TEXT NOT NULL DEFAULT '',
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "UserSettings_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -130,6 +138,83 @@ async function createSchema(dbUrl: string): Promise<void> {
   }
 }
 
+/**
+ * Run incremental migrations on an existing database.
+ * Each migration checks if it needs to run before executing.
+ */
+async function runMigrations(dbUrl: string): Promise<void> {
+  const tmpPrisma = new PrismaClient({
+    datasources: { db: { url: dbUrl } },
+  });
+
+  try {
+    // Migration: Add preferredLLMProvider column to UserSettings
+    const columns: any[] = await tmpPrisma.$queryRawUnsafe(
+      `PRAGMA table_info("UserSettings")`
+    );
+    const hasLLMProvider = columns.some((col: any) => col.name === 'preferredLLMProvider');
+    if (!hasLLMProvider) {
+      console.log('[DB] Migrating: Adding preferredLLMProvider column');
+      await tmpPrisma.$executeRawUnsafe(
+        `ALTER TABLE "UserSettings" ADD COLUMN "preferredLLMProvider" TEXT NOT NULL DEFAULT 'groq'`
+      );
+      console.log('[DB] Migration complete: preferredLLMProvider added');
+    }
+
+    // Migration: Add translation & minutes settings columns
+    const hasTranslationTarget = columns.some((col: any) => col.name === 'translationTargetLanguage');
+    if (!hasTranslationTarget) {
+      console.log('[DB] Migrating: Adding translation & minutes settings columns');
+      await tmpPrisma.$executeRawUnsafe(
+        `ALTER TABLE "UserSettings" ADD COLUMN "translationTargetLanguage" TEXT NOT NULL DEFAULT 'en'`
+      );
+      await tmpPrisma.$executeRawUnsafe(
+        `ALTER TABLE "UserSettings" ADD COLUMN "translationModel" TEXT NOT NULL DEFAULT ''`
+      );
+      await tmpPrisma.$executeRawUnsafe(
+        `ALTER TABLE "UserSettings" ADD COLUMN "minutesModel" TEXT NOT NULL DEFAULT ''`
+      );
+      console.log('[DB] Migration complete: translation & minutes settings added');
+    }
+
+    // Migration: Add translation/minutes LLM provider columns
+    const columnsAfter: any[] = await tmpPrisma.$queryRawUnsafe(
+      `PRAGMA table_info("UserSettings")`
+    );
+    const hasTranslationLLMProvider = columnsAfter.some((col: any) => col.name === 'translationLLMProvider');
+    if (!hasTranslationLLMProvider) {
+      console.log('[DB] Migrating: Adding translationLLMProvider & minutesLLMProvider columns');
+      await tmpPrisma.$executeRawUnsafe(
+        `ALTER TABLE "UserSettings" ADD COLUMN "translationLLMProvider" TEXT NOT NULL DEFAULT ''`
+      );
+      await tmpPrisma.$executeRawUnsafe(
+        `ALTER TABLE "UserSettings" ADD COLUMN "minutesLLMProvider" TEXT NOT NULL DEFAULT ''`
+      );
+      console.log('[DB] Migration complete: translation/minutes LLM providers added');
+    }
+
+    // Migration: Add llmProvider/llmModel columns to Session
+    const sessionColumns: any[] = await tmpPrisma.$queryRawUnsafe(
+      `PRAGMA table_info("Session")`
+    );
+    const hasLlmProviderCol = sessionColumns.some((col: any) => col.name === 'llmProvider');
+    if (!hasLlmProviderCol) {
+      console.log('[DB] Migrating: Adding llmProvider & llmModel columns to Session');
+      await tmpPrisma.$executeRawUnsafe(
+        `ALTER TABLE "Session" ADD COLUMN "llmProvider" TEXT`
+      );
+      await tmpPrisma.$executeRawUnsafe(
+        `ALTER TABLE "Session" ADD COLUMN "llmModel" TEXT`
+      );
+      console.log('[DB] Migration complete: llmProvider/llmModel added to Session');
+    }
+  } catch (err) {
+    console.error('[DB] Migration error:', err);
+  } finally {
+    await tmpPrisma.$disconnect();
+  }
+}
+
 export async function initializeDatabase(): Promise<void> {
   if (!app.isPackaged) return;
 
@@ -148,6 +233,9 @@ export async function initializeDatabase(): Promise<void> {
       try { fs.unlinkSync(dbPath); } catch { /* ignore */ }
       throw err;
     }
+  } else {
+    // Existing database - run incremental migrations
+    await runMigrations(dbUrl);
   }
 }
 

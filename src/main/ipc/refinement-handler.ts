@@ -1,5 +1,8 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { refineWithGroq, isGroqRefinementConfigured } from '../services/groq-refinement-service';
+import { refineWithFireworks, isFireworksLLMConfigured } from '../services/fireworks-llm-service';
+import { refineWithOpenAI, isOpenAILLMConfigured } from '../services/openai-llm-service';
+import { refineWithAnthropic, isAnthropicConfigured } from '../services/anthropic-llm-service';
 import { refineText } from '../services/refinement-service';
 import { TextChunker, countWords } from '../services/text-chunker';
 import { generateSummary } from '../services/summary-service';
@@ -23,9 +26,9 @@ export function registerRefinementHandlers(mainWindow: BrowserWindow) {
   // Start refinement
   ipcMain.handle(IPC_CHANNELS.REFINEMENT.START, async (_event, request: RefinementRequest) => {
     try {
-      const { text, formatType, language, refineModel, classifierModel } = request;
+      const { text, formatType, language, refineModel, classifierModel, llmProvider } = request;
 
-      console.log('[Refinement] Starting refinement, text length:', text?.length, 'formatType:', formatType);
+      console.log('[Refinement] Starting refinement, text length:', text?.length, 'formatType:', formatType, 'llmProvider:', llmProvider);
 
       if (!text || text.trim().length === 0) {
         console.log('[Refinement] Error: Text is required');
@@ -38,11 +41,14 @@ export function registerRefinementHandlers(mainWindow: BrowserWindow) {
       const wordCount = countWords(text);
       console.log('[Refinement] Word count:', wordCount);
 
+      // Determine which LLM provider to use
+      const selectedLLMProvider = llmProvider || 'groq';
+
       // Check if text needs chunking (>2000 words)
       if (textChunker.needsChunking(text)) {
         console.log('[Refinement] Long text detected, using chunked refinement');
         const result = await handleChunkedRefinement(
-          mainWindow, text, { formatType, language, refineModel, classifierModel }
+          mainWindow, text, { formatType, language, refineModel, classifierModel, llmProvider: selectedLLMProvider }
         );
 
         mainWindow.webContents.send(IPC_CHANNELS.REFINEMENT.COMPLETE, result);
@@ -50,44 +56,59 @@ export function registerRefinementHandlers(mainWindow: BrowserWindow) {
       }
 
       // Short text - standard refinement
-      // Try Groq first (preferred), fallback to OpenAI
-      console.log('[Refinement] Groq configured:', isGroqRefinementConfigured());
-      if (isGroqRefinementConfigured()) {
-        const retryResult = await withRetry(() => refineWithGroq(text, {
-          language,
-          formatType,
-          refineModel: refineModel as any,
-          classifierModel: classifierModel as any,
-          generateSummary: true,
-          generateFormal: formatType === 'FORMATTED' || formatType === 'AUTO',
-        }));
+      const refinementOptions = {
+        language,
+        formatType,
+        refineModel: refineModel as any,
+        classifierModel: classifierModel as any,
+        generateSummary: true,
+        generateFormal: formatType === 'FORMATTED' || formatType === 'AUTO',
+      };
 
+      let result: RefinementResult | null = null;
+
+      if (selectedLLMProvider === 'fireworks' && isFireworksLLMConfigured()) {
+        console.log('[Refinement] Using Fireworks LLM');
+        const retryResult = await withRetry(() => refineWithFireworks(text, refinementOptions));
         if (!retryResult.success || !retryResult.data) {
           throw retryResult.error || new Error('Refinement failed after retries');
         }
-
-        const result = retryResult.data;
-
-        console.log('[Refinement] Groq result:', {
-          text: result.text?.substring(0, 50),
-          formalText: result.formalText?.substring(0, 50),
-          summary: result.summary?.substring(0, 50)
+        result = retryResult.data;
+      } else if (selectedLLMProvider === 'openai' && isOpenAILLMConfigured()) {
+        console.log('[Refinement] Using OpenAI LLM');
+        const retryResult = await withRetry(() => refineWithOpenAI(text, refinementOptions));
+        if (!retryResult.success || !retryResult.data) {
+          throw retryResult.error || new Error('Refinement failed after retries');
+        }
+        result = retryResult.data;
+      } else if (selectedLLMProvider === 'anthropic' && isAnthropicConfigured()) {
+        console.log('[Refinement] Using Anthropic LLM');
+        const retryResult = await withRetry(() => refineWithAnthropic(text, refinementOptions));
+        if (!retryResult.success || !retryResult.data) {
+          throw retryResult.error || new Error('Refinement failed after retries');
+        }
+        result = retryResult.data;
+      } else if (isGroqRefinementConfigured()) {
+        console.log('[Refinement] Using Groq LLM');
+        const retryResult = await withRetry(() => refineWithGroq(text, refinementOptions));
+        if (!retryResult.success || !retryResult.data) {
+          throw retryResult.error || new Error('Refinement failed after retries');
+        }
+        result = retryResult.data;
+      } else {
+        // Fallback to OpenAI refinement service
+        console.log('[Refinement] Falling back to OpenAI');
+        result = await refineText(text, {
+          format: formatType,
+          generateSummary: true,
+          model: 'gpt-4o-mini',
         });
-
-        // Emit complete event
-        mainWindow.webContents.send(IPC_CHANNELS.REFINEMENT.COMPLETE, result);
-
-        return {
-          success: true,
-          data: result,
-        };
       }
 
-      // Fallback to OpenAI refinement service
-      const result = await refineText(text, {
-        format: formatType,
-        generateSummary: true,
-        model: 'gpt-4o-mini',
+      console.log('[Refinement] Result:', {
+        text: result?.text?.substring(0, 50),
+        formalText: result?.formalText?.substring(0, 50),
+        summary: result?.summary?.substring(0, 50)
       });
 
       // Emit complete event
@@ -120,9 +141,9 @@ export function registerRefinementHandlers(mainWindow: BrowserWindow) {
 async function handleChunkedRefinement(
   mainWindow: BrowserWindow,
   text: string,
-  options: { formatType?: string; language?: string; refineModel?: string; classifierModel?: string }
+  options: { formatType?: string; language?: string; refineModel?: string; classifierModel?: string; llmProvider?: string }
 ): Promise<RefinementResult> {
-  const { formatType, language, refineModel, classifierModel } = options;
+  const { formatType, language, refineModel, classifierModel, llmProvider } = options;
   const chunks = textChunker.chunkText(text);
   const totalChunks = chunks.length;
 
@@ -153,14 +174,26 @@ async function handleChunkedRefinement(
 
     console.log(`[Refinement] Processing chunk ${i + 1}/${totalChunks} (${chunk.wordCount} words)`);
 
-    const retryResult = await withRetry(() => refineWithGroq(chunk.text, {
+    const chunkOptions = {
       language,
       formatType,
       refineModel: refineModel as any,
       classifierModel: classifierModel as any,
       generateSummary: false,
       generateFormal: formatType === 'FORMATTED' || formatType === 'AUTO',
-    }));
+    };
+
+    let chunkRefineFn: () => Promise<RefinementResult>;
+    if (llmProvider === 'fireworks' && isFireworksLLMConfigured()) {
+      chunkRefineFn = () => refineWithFireworks(chunk.text, chunkOptions);
+    } else if (llmProvider === 'openai' && isOpenAILLMConfigured()) {
+      chunkRefineFn = () => refineWithOpenAI(chunk.text, chunkOptions);
+    } else if (llmProvider === 'anthropic' && isAnthropicConfigured()) {
+      chunkRefineFn = () => refineWithAnthropic(chunk.text, chunkOptions);
+    } else {
+      chunkRefineFn = () => refineWithGroq(chunk.text, chunkOptions);
+    }
+    const retryResult = await withRetry(chunkRefineFn);
 
     if (retryResult.success && retryResult.data) {
       refinedChunks.push(retryResult.data.text);
@@ -196,6 +229,7 @@ async function handleChunkedRefinement(
     summary = await generateSummary(textForSummary, {
       language,
       model: refineModel,
+      llmProvider: llmProvider as any,
     });
   } catch (err) {
     console.error('[Refinement] Summary generation failed:', err);

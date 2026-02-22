@@ -201,14 +201,14 @@ export function RecordingPanel({ onRecordingComplete, onRecordingStart, classNam
 
   // Listen for toggle-recording event from MainLayout (triggered by global shortcut)
   React.useEffect(() => {
-    const handleToggleRecording = async () => {
-      console.log('Toggle recording event received, isRecording:', isRecording, 'status:', status);
+    const handleToggleRecording = async (event: Event) => {
+      const mode = (event as CustomEvent).detail?.mode || 'normal';
+      console.log('Toggle recording event received, isRecording:', isRecording, 'status:', status, 'mode:', mode);
       if (isRecording) {
         await stopWorkflow();
       } else if (status === 'idle' || status === 'complete' || status === 'error') {
-        // idle, complete, error 상태에서 녹음 시작 가능
         onRecordingStart?.();
-        await startWorkflow();
+        await startWorkflow(mode);
       }
     };
 
@@ -226,6 +226,10 @@ export function RecordingPanel({ onRecordingComplete, onRecordingStart, classNam
         return '변환 중...';
       case 'refining':
         return '정제 중...';
+      case 'translating':
+        return '번역 중...';
+      case 'generating-minutes':
+        return '구조화 정리 중...';
       case 'saving':
         return '저장 중...';
       case 'complete':
@@ -243,6 +247,8 @@ export function RecordingPanel({ onRecordingComplete, onRecordingStart, classNam
         return isWarning ? 'warning' : 'destructive';
       case 'transcribing':
       case 'refining':
+      case 'translating':
+      case 'generating-minutes':
       case 'saving':
         return 'secondary';
       case 'complete':
@@ -254,7 +260,7 @@ export function RecordingPanel({ onRecordingComplete, onRecordingStart, classNam
     }
   };
 
-  const isProcessing = ['transcribing', 'refining', 'saving'].includes(status);
+  const isProcessing = ['transcribing', 'refining', 'translating', 'generating-minutes', 'saving'].includes(status);
   // complete 상태에서도 녹음 UI 표시 (결과는 DashboardPage에서 표시)
   const showRecordingUI = status !== 'complete' || !currentSession;
 

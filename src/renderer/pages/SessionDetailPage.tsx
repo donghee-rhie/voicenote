@@ -610,12 +610,20 @@ export function SessionDetailPage() {
               <p>{session.language || '없음'}</p>
             </div>
             <div>
-              <p className="text-muted-foreground mb-1">제공자</p>
+              <p className="text-muted-foreground mb-1">STT 제공자</p>
               <p>{session.provider || '없음'}</p>
             </div>
             <div>
-              <p className="text-muted-foreground mb-1">모델</p>
+              <p className="text-muted-foreground mb-1">STT 모델</p>
               <p>{session.model || '없음'}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground mb-1">LLM 제공자</p>
+              <p>{session.llmProvider || '없음'}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground mb-1">LLM 모델</p>
+              <p>{session.llmModel || '없음'}</p>
             </div>
             <div>
               <p className="text-muted-foreground mb-1">포맷 타입</p>

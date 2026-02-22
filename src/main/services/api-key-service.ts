@@ -6,6 +6,9 @@ import type { ApiKeyType } from '../../common/types/ipc';
 interface ApiKeyStore {
   groq?: string;
   elevenlabs?: string;
+  fireworks?: string;
+  openai?: string;
+  anthropic?: string;
 }
 
 const ENCRYPTION_KEY = 'voicenote-electron-api-keys-v1';
@@ -140,6 +143,12 @@ export function getApiKeyWithFallback(type: ApiKeyType): string | null {
       return process.env.GROQ_API_KEY || null;
     case 'elevenlabs':
       return process.env.ELEVENLABS_API_KEY || null;
+    case 'fireworks':
+      return process.env.FIREWORKS_API_KEY || null;
+    case 'openai':
+      return process.env.OPENAI_API_KEY || null;
+    case 'anthropic':
+      return process.env.ANTHROPIC_API_KEY || null;
     default:
       return null;
   }

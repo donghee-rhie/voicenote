@@ -22,6 +22,20 @@ export function registerGlobalShortcuts(mainWindow: BrowserWindow): void {
     }
   });
 
+  // Ctrl+Shift+T (Cmd+Shift+T on macOS): Toggle translation recording
+  globalShortcut.register('CommandOrControl+Shift+T', () => {
+    console.log('[Shortcut] Translation toggle (background mode)');
+    setSuppressWindowShow(true);
+    mainWindow.webContents.send('shortcut:translation-toggle');
+  });
+
+  // Ctrl+Shift+M (Cmd+Shift+M on macOS): Toggle minutes recording
+  globalShortcut.register('CommandOrControl+Shift+M', () => {
+    console.log('[Shortcut] Minutes toggle (background mode)');
+    setSuppressWindowShow(true);
+    mainWindow.webContents.send('shortcut:minutes-toggle');
+  });
+
   // Ctrl+Shift+C (Cmd+Shift+C on macOS): Copy last refined text to clipboard
   globalShortcut.register('CommandOrControl+Shift+C', () => {
     mainWindow.webContents.send('shortcut:paste-from-clipboard');

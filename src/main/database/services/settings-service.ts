@@ -11,6 +11,16 @@ export interface UpdateUserSettingsData {
   preferredSTTProvider?: string;
   preferredLanguage?: string;
   autoSaveInterval?: number;
+  sttModel?: string;
+  refineModel?: string;
+  maxRecordingDuration?: number;
+  autoCopyOnComplete?: boolean;
+  preferredLLMProvider?: string;
+  translationTargetLanguage?: string;
+  translationLLMProvider?: string;
+  translationModel?: string;
+  minutesLLMProvider?: string;
+  minutesModel?: string;
 }
 
 export interface CreateSystemSettingData {

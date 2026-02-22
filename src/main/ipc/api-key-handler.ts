@@ -10,7 +10,7 @@ export function registerApiKeyHandlers() {
   // Get API key info (masked, never returns actual key)
   ipcMain.handle(IPC_CHANNELS.API_KEY.GET, async (_event, type: ApiKeyType) => {
     try {
-      if (!type || !['groq', 'elevenlabs'].includes(type)) {
+      if (!type || !['groq', 'elevenlabs', 'fireworks', 'openai', 'anthropic'].includes(type)) {
         return { success: false, error: 'Invalid API key type' };
       }
 
@@ -31,7 +31,7 @@ export function registerApiKeyHandlers() {
   // Set API key
   ipcMain.handle(IPC_CHANNELS.API_KEY.SET, async (_event, type: ApiKeyType, key: string) => {
     try {
-      if (!type || !['groq', 'elevenlabs'].includes(type)) {
+      if (!type || !['groq', 'elevenlabs', 'fireworks', 'openai', 'anthropic'].includes(type)) {
         return { success: false, error: 'Invalid API key type' };
       }
 
@@ -57,7 +57,7 @@ export function registerApiKeyHandlers() {
   // Delete API key
   ipcMain.handle(IPC_CHANNELS.API_KEY.DELETE, async (_event, type: ApiKeyType) => {
     try {
-      if (!type || !['groq', 'elevenlabs'].includes(type)) {
+      if (!type || !['groq', 'elevenlabs', 'fireworks', 'openai', 'anthropic'].includes(type)) {
         return { success: false, error: 'Invalid API key type' };
       }
 
@@ -76,7 +76,7 @@ export function registerApiKeyHandlers() {
   // Validate API key (basic check)
   ipcMain.handle(IPC_CHANNELS.API_KEY.VALIDATE, async (_event, type: ApiKeyType, key: string) => {
     try {
-      if (!type || !['groq', 'elevenlabs'].includes(type)) {
+      if (!type || !['groq', 'elevenlabs', 'fireworks', 'openai', 'anthropic'].includes(type)) {
         return { success: false, error: 'Invalid API key type' };
       }
 
@@ -97,6 +97,18 @@ export function registerApiKeyHandlers() {
         case 'elevenlabs':
           valid = trimmedKey.length > 20;
           message = valid ? 'ElevenLabs API 키 형식이 올바릅니다' : 'API 키가 너무 짧습니다';
+          break;
+        case 'fireworks':
+          valid = trimmedKey.length > 20;
+          message = valid ? 'Fireworks API 키 형식이 올바릅니다' : 'API 키가 너무 짧습니다';
+          break;
+        case 'openai':
+          valid = trimmedKey.startsWith('sk-') && trimmedKey.length > 20;
+          message = valid ? 'OpenAI API 키 형식이 올바릅니다' : 'OpenAI API 키는 sk-로 시작해야 합니다';
+          break;
+        case 'anthropic':
+          valid = trimmedKey.startsWith('sk-ant-') && trimmedKey.length > 20;
+          message = valid ? 'Anthropic API 키 형식이 올바릅니다' : 'Anthropic API 키는 sk-ant-로 시작해야 합니다';
           break;
       }
 

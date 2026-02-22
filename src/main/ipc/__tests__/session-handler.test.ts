@@ -45,6 +45,8 @@ const mockSession = {
   language: 'ko-KR',
   provider: null,
   model: null,
+  llmProvider: null,
+  llmModel: null,
   formatType: 'MINUTES',
   status: 'COMPLETED',
   tags: null,
@@ -146,7 +148,8 @@ describe('Session Handler', () => {
       const updatedSession = { ...mockSession, title: 'Updated Title' };
       vi.mocked(updateSession).mockResolvedValue(updatedSession);
 
-      const result = await registeredHandlers[IPC_CHANNELS.SESSION.UPDATE](mockEvent, 'session-1', {
+      const result = await registeredHandlers[IPC_CHANNELS.SESSION.UPDATE](mockEvent, {
+        id: 'session-1',
         title: 'Updated Title',
       });
 
@@ -156,7 +159,8 @@ describe('Session Handler', () => {
     });
 
     it('should fail when session ID is missing', async () => {
-      const result = await registeredHandlers[IPC_CHANNELS.SESSION.UPDATE](mockEvent, '', {
+      const result = await registeredHandlers[IPC_CHANNELS.SESSION.UPDATE](mockEvent, {
+        id: '',
         title: 'Test',
       });
 
@@ -167,7 +171,8 @@ describe('Session Handler', () => {
     it('should handle database error', async () => {
       vi.mocked(updateSession).mockRejectedValue(new Error('Session not found'));
 
-      const result = await registeredHandlers[IPC_CHANNELS.SESSION.UPDATE](mockEvent, 'session-999', {
+      const result = await registeredHandlers[IPC_CHANNELS.SESSION.UPDATE](mockEvent, {
+        id: 'session-999',
         title: 'Test',
       });
 

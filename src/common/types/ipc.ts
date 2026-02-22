@@ -2,6 +2,9 @@
  * IPC Channel definitions and related types
  */
 
+// Workflow mode determines post-transcription processing
+export type WorkflowMode = 'normal' | 'translate' | 'minutes';
+
 // IPC Channel constants grouped by domain
 export const IPC_CHANNELS = {
   AUDIO: {
@@ -23,6 +26,18 @@ export const IPC_CHANNELS = {
     COMPLETE: 'refinement:complete',
     ERROR: 'refinement:error',
     REFINEMENT_PROGRESS: 'refinement:chunk-progress',
+  },
+  TRANSLATION: {
+    START: 'translation:start',
+    COMPLETE: 'translation:complete',
+    ERROR: 'translation:error',
+    PROGRESS: 'translation:chunk-progress',
+  },
+  MINUTES: {
+    START: 'minutes:start',
+    COMPLETE: 'minutes:complete',
+    ERROR: 'minutes:error',
+    PROGRESS: 'minutes:chunk-progress',
   },
   SESSION: {
     CREATE: 'session:create',
@@ -64,6 +79,9 @@ export const IPC_CHANNELS = {
     AUTO_START_GET: 'system:auto-start-get',
     AUTO_START_SET: 'system:auto-start-set',
   },
+  MODELS: {
+    FETCH: 'models:fetch',
+  },
 } as const;
 
 // Recording state interface
@@ -74,7 +92,7 @@ export interface RecordingState {
 }
 
 // Transcription types
-export type STTProvider = 'groq' | 'elevenlabs';
+export type STTProvider = 'groq' | 'elevenlabs' | 'fireworks';
 
 export interface TranscriptionRequest {
   audioPath: string;
@@ -104,12 +122,24 @@ export interface TranscriptionResult {
 }
 
 // Refinement types
+export type LLMProvider = 'groq' | 'fireworks' | 'openai' | 'anthropic';
+
+export interface ModelFetchRequest {
+  provider: LLMProvider;
+}
+
+export interface ModelFetchResult {
+  models: LLMModelInfo[];
+  fromCache: boolean;
+}
+
 export interface RefinementRequest {
   text: string;
   formatType?: string;
   language?: string;
   refineModel?: string;
   classifierModel?: string;
+  llmProvider?: LLMProvider;
 }
 
 export interface RefinementResult {
@@ -153,7 +183,7 @@ export interface LLMModelInfo {
 }
 
 // API Key types
-export type ApiKeyType = 'groq' | 'elevenlabs';
+export type ApiKeyType = 'groq' | 'elevenlabs' | 'fireworks' | 'openai' | 'anthropic';
 
 // Processing progress types for long recording support
 export type ProcessingStage = 'chunking' | 'transcribing' | 'merging' | 'refining' | 'summarizing';
@@ -169,6 +199,32 @@ export interface ProcessingProgress {
   chunkErrors?: number;      // Number of chunks that failed
 }
 
-// IPC channel for processing progress
-// Add to IPC_CHANNELS:
-// TRANSCRIPTION.CHUNK_PROGRESS: 'transcription:chunk-progress'
+// Translation types
+export interface TranslationRequest {
+  text: string;
+  targetLanguage: string;
+  sourceLanguage?: string;
+  model?: string;
+  llmProvider?: LLMProvider;
+}
+
+export interface TranslationResult {
+  text: string;
+  sourceLanguage?: string;
+  targetLanguage: string;
+  modelsUsed?: string;
+}
+
+// Minutes (meeting notes) types
+export interface MinutesRequest {
+  text: string;
+  language?: string;
+  model?: string;
+  llmProvider?: LLMProvider;
+}
+
+export interface MinutesResult {
+  text: string;
+  summary?: string;
+  modelsUsed?: string;
+}

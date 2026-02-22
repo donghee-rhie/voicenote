@@ -4,7 +4,7 @@ import { useSession } from './useSession';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettings } from '@/contexts/SettingsContext';
 import { IPC_CHANNELS, TranscriptionSegment } from '@common/types/ipc';
-import type { ProcessingProgress } from '@common/types/ipc';
+import type { ProcessingProgress, WorkflowMode, LLMProvider } from '@common/types/ipc';
 import { Session, FormatType } from '@common/types/session';
 
 // 시스템 알림 표시 헬퍼
@@ -23,6 +23,8 @@ type WorkflowStatus =
   | 'recording'
   | 'transcribing'
   | 'refining'
+  | 'translating'
+  | 'generating-minutes'
   | 'saving'
   | 'complete'
   | 'error';
@@ -33,7 +35,7 @@ interface UseWorkflowOptions extends UseRecordingOptions {
 
 interface UseWorkflowResult {
   status: WorkflowStatus;
-  startWorkflow: () => Promise<void>;
+  startWorkflow: (mode?: WorkflowMode) => Promise<void>;
   stopWorkflow: () => Promise<void>;
   cancelWorkflow: () => void;
   processAudioFile: (audioPath: string, durationSec: number) => Promise<void>;
@@ -100,6 +102,8 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
 
   // Store recording duration for passing to transcription
   const recordingDurationRef = useRef<number>(0);
+  // Store current workflow mode
+  const workflowModeRef = useRef<WorkflowMode>('normal');
 
   // Listen for chunk progress events from main process
   useEffect(() => {
@@ -121,9 +125,27 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
       }
     );
 
+    const unsubTranslation = window.electronAPI.on(
+      IPC_CHANNELS.TRANSLATION.PROGRESS,
+      (data: ProcessingProgress) => {
+        setProcessingProgress(data);
+        setProgress(data.stageLabel);
+      }
+    );
+
+    const unsubMinutes = window.electronAPI.on(
+      IPC_CHANNELS.MINUTES.PROGRESS,
+      (data: ProcessingProgress) => {
+        setProcessingProgress(data);
+        setProgress(data.stageLabel);
+      }
+    );
+
     return () => {
       unsubTranscription?.();
       unsubRefinement?.();
+      unsubTranslation?.();
+      unsubMinutes?.();
     };
   }, []);
 
@@ -153,19 +175,35 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
       }
 
       // Get settings values with defaults
-      const sttProvider = settings?.preferredSTTProvider === 'elevenlabs' ? 'elevenlabs' : 'groq';
+      const sttProvider = settings?.preferredSTTProvider || 'groq';
+      const llmProvider: LLMProvider = (settings?.preferredLLMProvider || 'groq') as LLMProvider;
       const language = settings?.preferredLanguage || 'ko-KR';
       const formatType = settings?.pasteFormat || 'FORMATTED';
       // ElevenLabs scribe_v2는 화자 분리 기본 활성화
       const speakerDiarization = settings?.speakerDiarization ?? (sttProvider === 'elevenlabs');
-      const refineModel = settings?.refineModel || 'openai/gpt-oss-120b';
+      const defaultLlmModels: Record<LLMProvider, string> = {
+        groq: 'openai/gpt-oss-120b',
+        fireworks: 'accounts/fireworks/models/gpt-oss-120b',
+        openai: 'gpt-4o',
+        anthropic: 'claude-sonnet-4-6',
+      };
+      const getDefaultLlmModel = (provider: string) => defaultLlmModels[provider as LLMProvider] || 'openai/gpt-oss-120b';
+      const fixModelForProvider = (model: string, provider: string): string => {
+        if (provider === 'fireworks' && !model.startsWith('accounts/fireworks/')) return getDefaultLlmModel('fireworks');
+        if (provider !== 'fireworks' && model.startsWith('accounts/fireworks/')) return getDefaultLlmModel(provider);
+        return model;
+      };
+      let refineModel = fixModelForProvider(settings?.refineModel || getDefaultLlmModel(llmProvider), llmProvider);
 
-      // Ensure model is valid for the selected provider
+      // Ensure STT model is valid for the selected provider
       const groqModels = ['whisper-large-v3', 'whisper-large-v3-turbo', 'distil-whisper-large-v3-en'];
       const elevenlabsModels = ['scribe_v1', 'scribe_v2'];
+      const fireworksModels = ['whisper-v3', 'whisper-v3-turbo'];
       let sttModel: string;
       if (sttProvider === 'elevenlabs') {
         sttModel = (settings?.sttModel && elevenlabsModels.includes(settings.sttModel)) ? settings.sttModel : 'scribe_v2';
+      } else if (sttProvider === 'fireworks') {
+        sttModel = (settings?.sttModel && fireworksModels.includes(settings.sttModel)) ? settings.sttModel : 'whisper-v3-turbo';
       } else {
         sttModel = (settings?.sttModel && groqModels.includes(settings.sttModel)) ? settings.sttModel : 'whisper-large-v3-turbo';
       }
@@ -219,94 +257,243 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
         setCurrentSegments(null);
       }
 
-      // 전사 완료 즉시 원문 복사 + 붙여넣기 (사용자가 바로 사용 가능)
-      if (settings?.autoCopyOnComplete) {
+      // Branch based on workflow mode
+      const currentMode = workflowModeRef.current;
+      console.log('[Workflow] Current mode:', currentMode);
+
+      if (currentMode === 'translate') {
+        // === TRANSLATION MODE ===
+        setStatus('translating');
+        setProgress('번역 중...');
+        await showNotification('전사 완료', '번역을 시작합니다...');
+
+        const targetLanguage = settings?.translationTargetLanguage || 'en';
+        const translationProvider = (settings?.translationLLMProvider || llmProvider) as LLMProvider;
+        // 모델 결정: 명시 설정 > 동일 프로바이더면 refineModel > 프로바이더 기본값
+        let translationModel: string;
+        if (settings?.translationModel) {
+          translationModel = fixModelForProvider(settings.translationModel, translationProvider);
+        } else if (translationProvider === llmProvider) {
+          translationModel = refineModel;
+        } else {
+          translationModel = getDefaultLlmModel(translationProvider);
+        }
+
+        console.log('[Workflow] Calling translation with:', { targetLanguage, model: translationModel, llmProvider: translationProvider, translationLLMProviderSetting: settings?.translationLLMProvider, translationModelSetting: settings?.translationModel });
+
+        const translationResult = await window.electronAPI.invoke(
+          IPC_CHANNELS.TRANSLATION.START,
+          {
+            text: originalText,
+            targetLanguage,
+            model: translationModel,
+            llmProvider: translationProvider,
+          }
+        );
+
+        if (!translationResult.success || !translationResult.data) {
+          throw new Error(translationResult.error || `번역 실패 (provider=${translationProvider}, model=${translationModel})`);
+        }
+
+        const translatedText = translationResult.data.text;
+        console.log('[Workflow] Translation complete:', translatedText?.substring(0, 100));
+
+        setCurrentRefinedText(translatedText || null);
+        setCurrentFormalText(null);
+
+        // Auto-paste translated text
         try {
-          await window.electronAPI.invoke('system:clipboard-copy', originalText);
-          options.onAutoCopy?.(originalText);
-          console.log('[Workflow] Auto-copied original text to clipboard immediately after transcription');
-          // 즉시 자동 붙여넣기 (Cmd+V 시뮬레이션)
+          await window.electronAPI.invoke('system:clipboard-copy', translatedText);
           await window.electronAPI.invoke('system:auto-paste');
-          console.log('[Workflow] Auto-paste simulated with original text');
-          await showNotification('전사 완료', '원문이 붙여넣기 되었습니다. 정제 진행 중...');
-        } catch (copyErr) {
-          console.error('Immediate auto copy/paste failed:', copyErr);
+          await showNotification('번역 완료', '번역된 텍스트가 붙여넣기 되었습니다');
+        } catch (pasteErr) {
+          console.error('Translation auto-paste failed:', pasteErr);
+          await showNotification('번역 완료', '번역이 완료되었습니다. 클립보드에 복사됨');
+        }
+
+        // Save session
+        setStatus('saving');
+        setProgress('세션을 저장 중...');
+
+        const newSession = await createSession({
+          userId: user.id,
+          originalText,
+          refinedText: translatedText,
+          summary: `[번역: ${targetLanguage}] ${originalText.substring(0, 100)}...`,
+          audioPath,
+          language: language.split('-')[0],
+          provider: sttProvider,
+          model: sttModel,
+          llmProvider: translationProvider,
+          llmModel: translationModel,
+          formatType: formatType as FormatType,
+        });
+
+        if (!newSession) throw new Error('세션 저장에 실패했습니다');
+
+        setCurrentSession(newSession);
+        setStatus('complete');
+        setProgress('완료!');
+        setProcessingProgress(null);
+
+      } else if (currentMode === 'minutes') {
+        // === MINUTES (구조화 정리) MODE ===
+        setStatus('generating-minutes');
+        setProgress('내용 구조화 중...');
+        await showNotification('전사 완료', '내용을 구조화하여 정리합니다...');
+
+        const minutesProvider = (settings?.minutesLLMProvider || llmProvider) as LLMProvider;
+        // 모델 결정: 명시 설정 > 동일 프로바이더면 refineModel > 프로바이더 기본값
+        let minutesModel: string;
+        if (settings?.minutesModel) {
+          minutesModel = fixModelForProvider(settings.minutesModel, minutesProvider);
+        } else if (minutesProvider === llmProvider) {
+          minutesModel = refineModel;
+        } else {
+          minutesModel = getDefaultLlmModel(minutesProvider);
+        }
+
+        console.log('[Workflow] Calling structured notes generation with:', { model: minutesModel, llmProvider: minutesProvider, minutesLLMProviderSetting: settings?.minutesLLMProvider, minutesModelSetting: settings?.minutesModel });
+
+        const minutesResult = await window.electronAPI.invoke(
+          IPC_CHANNELS.MINUTES.START,
+          {
+            text: originalText,
+            language: language.split('-')[0],
+            model: minutesModel,
+            llmProvider: minutesProvider,
+          }
+        );
+
+        if (!minutesResult.success || !minutesResult.data) {
+          throw new Error(minutesResult.error || `구조화 정리 실패 (provider=${minutesProvider}, model=${minutesModel})`);
+        }
+
+        const minutesText = minutesResult.data.text;
+        console.log('[Workflow] Structured notes complete:', minutesText?.substring(0, 100));
+
+        setCurrentRefinedText(minutesText || null);
+        setCurrentFormalText(null);
+
+        // Auto-paste minutes text
+        try {
+          await window.electronAPI.invoke('system:clipboard-copy', minutesText);
+          await window.electronAPI.invoke('system:auto-paste');
+          await showNotification('정리 완료', '구조화된 텍스트가 붙여넣기 되었습니다');
+        } catch (pasteErr) {
+          console.error('Minutes auto-paste failed:', pasteErr);
+          await showNotification('정리 완료', '구조화 정리가 완료되었습니다. 클립보드에 복사됨');
+        }
+
+        // Save session
+        setStatus('saving');
+        setProgress('세션을 저장 중...');
+
+        const newSession = await createSession({
+          userId: user.id,
+          originalText,
+          refinedText: minutesText,
+          summary: `[구조화 정리] ${originalText.substring(0, 100)}...`,
+          audioPath,
+          language: language.split('-')[0],
+          provider: sttProvider,
+          model: sttModel,
+          llmProvider: minutesProvider,
+          llmModel: minutesModel,
+          formatType: formatType as FormatType,
+        });
+
+        if (!newSession) throw new Error('세션 저장에 실패했습니다');
+
+        setCurrentSession(newSession);
+        setStatus('complete');
+        setProgress('완료!');
+        setProcessingProgress(null);
+
+      } else {
+        // === NORMAL MODE (기존 동작) ===
+        // 전사 완료 즉시 원문 복사 + 붙여넣기 (사용자가 바로 사용 가능)
+        if (settings?.autoCopyOnComplete) {
+          try {
+            await window.electronAPI.invoke('system:clipboard-copy', originalText);
+            options.onAutoCopy?.(originalText);
+            console.log('[Workflow] Auto-copied original text to clipboard immediately after transcription');
+            await window.electronAPI.invoke('system:auto-paste');
+            console.log('[Workflow] Auto-paste simulated with original text');
+            await showNotification('전사 완료', '원문이 붙여넣기 되었습니다. 정제 진행 중...');
+          } catch (copyErr) {
+            console.error('Immediate auto copy/paste failed:', copyErr);
+            await showNotification('전사 완료', '텍스트 변환 완료. 정제 진행 중...');
+          }
+        } else {
           await showNotification('전사 완료', '텍스트 변환 완료. 정제 진행 중...');
         }
-      } else {
-        await showNotification('전사 완료', '텍스트 변환 완료. 정제 진행 중...');
-      }
 
-      // Step 3: Refine (백그라운드에서 진행)
-      setStatus('refining');
-      setProgress('텍스트를 정제하고 요약 중...');
+        // Step 3: Refine
+        setStatus('refining');
+        setProgress('텍스트를 정제하고 요약 중...');
 
-      console.log('[Workflow] Calling refinement with:', { text: originalText.substring(0, 50), formatType, refineModel });
-      
-      const refinementResult = await window.electronAPI.invoke(
-        IPC_CHANNELS.REFINEMENT.START,
-        { 
-          text: originalText, 
-          formatType,
-          language: language.split('-')[0],
-          refineModel,
+        console.log('[Workflow] Calling refinement with:', { text: originalText.substring(0, 50), formatType, refineModel });
+
+        const refinementResult = await window.electronAPI.invoke(
+          IPC_CHANNELS.REFINEMENT.START,
+          {
+            text: originalText,
+            formatType,
+            language: language.split('-')[0],
+            refineModel,
+            llmProvider,
+          }
+        );
+
+        console.log('[Workflow] Refinement result:', refinementResult);
+
+        if (!refinementResult.success || !refinementResult.data) {
+          throw new Error(refinementResult.error || '정제에 실패했습니다');
         }
-      );
 
-      console.log('[Workflow] Refinement result:', refinementResult);
+        const refinedText = refinementResult.data.text;
+        const formalText = refinementResult.data.formalText;
+        const summary = refinementResult.data.summary;
+        console.log('[Workflow] Refined:', { refinedText: refinedText?.substring(0, 50), formalText: formalText?.substring(0, 50), summary });
 
-      if (!refinementResult.success || !refinementResult.data) {
-        throw new Error(refinementResult.error || '정제에 실패했습니다');
+        await showNotification('정제 완료', '텍스트 정제 및 요약이 완료되었습니다');
+
+        setCurrentRefinedText(refinedText || null);
+        setCurrentFormalText(formalText || null);
+
+        // Step 4: Create session
+        setStatus('saving');
+        setProgress('세션을 저장 중...');
+
+        const newSession = await createSession({
+          userId: user.id,
+          originalText,
+          refinedText: formalText || refinedText,
+          summary,
+          audioPath,
+          language: language.split('-')[0],
+          provider: sttProvider,
+          model: sttModel,
+          llmProvider,
+          llmModel: refineModel,
+          formatType: formatType as FormatType,
+        });
+
+        if (!newSession) throw new Error('세션 저장에 실패했습니다');
+
+        setCurrentSession(newSession);
+        setStatus('complete');
+        setProgress('완료!');
+        setProcessingProgress(null);
+
+        await showNotification('정제 완료', '텍스트 정제 및 요약이 완료되었습니다');
       }
 
-      const refinedText = refinementResult.data.text;
-      const formalText = refinementResult.data.formalText;
-      const summary = refinementResult.data.summary;
-      console.log('[Workflow] Refined:', { refinedText: refinedText?.substring(0, 50), formalText: formalText?.substring(0, 50), summary });
-      
-      // 정제 완료 알림
-      await showNotification('정제 완료', '텍스트 정제 및 요약이 완료되었습니다');
-
-      // 정제/요약 텍스트 별도 저장 (탭별로 다른 내용 표시용)
-      setCurrentRefinedText(refinedText || null);
-      setCurrentFormalText(formalText || null);
-
-      // Step 4: Create session
-      setStatus('saving');
-      setProgress('세션을 저장 중...');
-
-      console.log('[Workflow] Creating session with:', { userId: user.id, originalText: originalText?.substring(0, 50), summary });
-      
-      const newSession = await createSession({
-        userId: user.id,
-        originalText,
-        refinedText: formalText || refinedText, // Use formalText if available
-        summary,
-        audioPath,
-        language: language.split('-')[0],
-        formatType: formatType as FormatType,
-      });
-
-      console.log('[Workflow] Created session:', newSession);
-
-      if (!newSession) {
-        throw new Error('세션 저장에 실패했습니다');
-      }
-
-      // Complete
-      setCurrentSession(newSession);
-      setStatus('complete');
-      setProgress('완료!');
-      setProcessingProgress(null);
-
-      // 완료 알림 - 정제 완료만 알림 (클립보드 복사 안 함)
-      await showNotification('정제 완료', '텍스트 정제 및 요약이 완료되었습니다');
-      
       // suppress 해제만 하고 창은 표시하지 않음 (알림으로 충분)
       try {
         if (window.electronAPI) {
           await window.electronAPI.invoke('window:set-suppress', false);
-          // 창 표시 안 함 - 알림으로 완료 확인 가능
         }
         console.log('[Workflow] Workflow complete (window not shown)');
       } catch (showErr) {
@@ -323,30 +510,40 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
     }
   }, [user, stopRecording, createSession, settings, options, duration]);
 
-  const startWorkflow = useCallback(async () => {
+  const startWorkflow = useCallback(async (mode: WorkflowMode = 'normal') => {
+    workflowModeRef.current = mode;
     setError(null);
     setCurrentSession(null);
     setCurrentSegments(null);
     setCurrentRefinedText(null);
     setCurrentFormalText(null);
     setProcessingProgress(null);
-    setProgress('녹음을 시작합니다...');
+
+    const modeLabels: Record<WorkflowMode, string> = {
+      normal: '녹음을 시작합니다...',
+      translate: '번역 모드 녹음을 시작합니다...',
+      minutes: '구조화 정리 모드 녹음을 시작합니다...',
+    };
+    const modeNotifications: Record<WorkflowMode, string> = {
+      normal: '음성 녹음이 시작되었습니다',
+      translate: '번역 모드 녹음이 시작되었습니다',
+      minutes: '구조화 정리 모드 녹음이 시작되었습니다',
+    };
+
+    setProgress(modeLabels[mode]);
     setStatus('recording');
 
     try {
-      // 녹음 시작 시 창 표시 억제
       if (window.electronAPI) {
         await window.electronAPI.invoke('window:set-suppress', true);
       }
       await startRecording();
-      // 녹음 시작 알림
-      await showNotification('녹음 시작', '음성 녹음이 시작되었습니다');
+      await showNotification('녹음 시작', modeNotifications[mode]);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : '녹음 시작 실패';
       setError(errorMessage);
       setStatus('error');
       setProgress('');
-      // 에러 시 suppress 해제
       if (window.electronAPI) {
         await window.electronAPI.invoke('window:set-suppress', false);
       }
@@ -390,18 +587,34 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
     setProcessingProgress(null);
 
     try {
-      const sttProvider = settings?.preferredSTTProvider === 'elevenlabs' ? 'elevenlabs' : 'groq';
+      const sttProvider = settings?.preferredSTTProvider || 'groq';
+      const llmProvider: LLMProvider = (settings?.preferredLLMProvider || 'groq') as LLMProvider;
       const language = settings?.preferredLanguage || 'ko-KR';
       const formatType = settings?.pasteFormat || 'FORMATTED';
       const speakerDiarization = settings?.speakerDiarization ?? (sttProvider === 'elevenlabs');
-      const refineModel = settings?.refineModel || 'openai/gpt-oss-120b';
+      const defaultLlmModels: Record<LLMProvider, string> = {
+        groq: 'openai/gpt-oss-120b',
+        fireworks: 'accounts/fireworks/models/gpt-oss-120b',
+        openai: 'gpt-4o',
+        anthropic: 'claude-sonnet-4-6',
+      };
+      const getDefaultLlmModel = (provider: string) => defaultLlmModels[provider as LLMProvider] || 'openai/gpt-oss-120b';
+      const fixModelForProvider = (model: string, provider: string): string => {
+        if (provider === 'fireworks' && !model.startsWith('accounts/fireworks/')) return getDefaultLlmModel('fireworks');
+        if (provider !== 'fireworks' && model.startsWith('accounts/fireworks/')) return getDefaultLlmModel(provider);
+        return model;
+      };
+      let refineModel = fixModelForProvider(settings?.refineModel || getDefaultLlmModel(llmProvider), llmProvider);
 
-      // Ensure model is valid for the selected provider
+      // Ensure STT model is valid for the selected provider
       const groqModels = ['whisper-large-v3', 'whisper-large-v3-turbo', 'distil-whisper-large-v3-en'];
       const elevenlabsModels = ['scribe_v1', 'scribe_v2'];
+      const fireworksModels = ['whisper-v3', 'whisper-v3-turbo'];
       let sttModel: string;
       if (sttProvider === 'elevenlabs') {
         sttModel = (settings?.sttModel && elevenlabsModels.includes(settings.sttModel)) ? settings.sttModel : 'scribe_v2';
+      } else if (sttProvider === 'fireworks') {
+        sttModel = (settings?.sttModel && fireworksModels.includes(settings.sttModel)) ? settings.sttModel : 'whisper-v3-turbo';
       } else {
         sttModel = (settings?.sttModel && groqModels.includes(settings.sttModel)) ? settings.sttModel : 'whisper-large-v3-turbo';
       }
@@ -410,7 +623,7 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
       setStatus('transcribing');
       setProgress('음성을 텍스트로 변환 중...');
 
-      console.log('[Workflow] Processing uploaded file:', { audioPath, durationSec, provider: sttProvider, model: sttModel, diarize: speakerDiarization, settingsProvider: settings?.preferredSTTProvider, settingsModel: settings?.sttModel });
+      console.log('[Workflow] Processing uploaded file:', { audioPath, durationSec, provider: sttProvider, model: sttModel, diarize: speakerDiarization, llmProvider });
 
       const transcriptionResult = await window.electronAPI.invoke(
         IPC_CHANNELS.TRANSCRIPTION.START,
@@ -451,6 +664,7 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
           formatType,
           language: language.split('-')[0],
           refineModel,
+          llmProvider,
         }
       );
 
@@ -476,6 +690,10 @@ export function useWorkflow(options: UseWorkflowOptions = {}): UseWorkflowResult
         summary,
         audioPath,
         language: language.split('-')[0],
+        provider: sttProvider,
+        model: sttModel,
+        llmProvider,
+        llmModel: refineModel,
         formatType: formatType as FormatType,
       });
 

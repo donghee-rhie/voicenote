@@ -1,21 +1,5 @@
-import OpenAI from 'openai';
 import type { RefinementResult } from '../../common/types/ipc';
-
-let openaiClient: OpenAI | null = null;
-
-/**
- * Initialize OpenAI client with API key
- */
-function getOpenAIClient(): OpenAI {
-  if (!openaiClient) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY is not set in environment variables');
-    }
-    openaiClient = new OpenAI({ apiKey });
-  }
-  return openaiClient;
-}
+import { openaiGenerate } from './openai-api';
 
 export interface RefinementOptions {
   language?: string;
@@ -50,8 +34,6 @@ export async function refineText(
   options: RefinementOptions = {}
 ): Promise<RefinementResult> {
   try {
-    const client = getOpenAIClient();
-
     if (!text || text.trim().length === 0) {
       throw new Error('Text is empty');
     }
@@ -60,17 +42,15 @@ export async function refineText(
     const model = options.model || 'gpt-4o-mini';
 
     // Refine the text
-    const refinementResponse = await client.chat.completions.create({
+    const refinementResponse = await openaiGenerate({
       model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: text },
-      ],
+      system: systemPrompt,
+      input: text,
       temperature: 0.7,
-      max_tokens: 4000,
+      max_new_tokens: 4000,
     });
 
-    const refinedText = refinementResponse.choices[0]?.message?.content || text;
+    const refinedText = refinementResponse.text || text;
 
     const result: RefinementResult = {
       text: refinedText,
@@ -78,20 +58,15 @@ export async function refineText(
 
     // Generate summary if requested
     if (options.generateSummary) {
-      const summaryResponse = await client.chat.completions.create({
+      const summaryResponse = await openaiGenerate({
         model,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a summarization assistant. Create a brief, concise summary of the following text in 2-3 sentences.',
-          },
-          { role: 'user', content: refinedText },
-        ],
+        system: 'You are a summarization assistant. Create a brief, concise summary of the following text in 2-3 sentences.',
+        input: refinedText,
         temperature: 0.7,
-        max_tokens: 500,
+        max_new_tokens: 500,
       });
 
-      result.summary = summaryResponse.choices[0]?.message?.content || undefined;
+      result.summary = summaryResponse.text || undefined;
     }
 
     return result;
@@ -103,9 +78,3 @@ export async function refineText(
   }
 }
 
-/**
- * Set API key at runtime (useful for settings updates)
- */
-export function setOpenAIApiKey(apiKey: string): void {
-  openaiClient = new OpenAI({ apiKey });
-}

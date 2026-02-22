@@ -9,6 +9,9 @@ import { registerAdminHandlers } from './admin-handler';
 import { registerApiKeyHandlers } from './api-key-handler';
 import { registerWindowHandlers } from './window-handler';
 import { registerStreamingHandlers } from './streaming-handler';
+import { registerTranslationHandlers } from './translation-handler';
+import { registerMinutesHandlers } from './minutes-handler';
+import { registerModelFetchingHandlers } from './model-fetching-handler';
 
 /**
  * Register all IPC handlers
@@ -22,10 +25,13 @@ export function registerAllHandlers(mainWindow: BrowserWindow): void {
   registerSystemHandlers(mainWindow);
   registerAdminHandlers();
   registerApiKeyHandlers();
+  registerModelFetchingHandlers();
 
   // Register handlers that need window reference for events
   registerTranscriptionHandlers(mainWindow);
   registerRefinementHandlers(mainWindow);
+  registerTranslationHandlers(mainWindow);
+  registerMinutesHandlers(mainWindow);
   registerWindowHandlers(mainWindow);
   registerStreamingHandlers();
 

@@ -13,6 +13,8 @@ export interface CreateSessionData {
   language?: string;
   provider?: string;
   model?: string;
+  llmProvider?: string;
+  llmModel?: string;
   formatType?: string;
 }
 
@@ -26,6 +28,8 @@ export interface UpdateSessionData {
   duration?: number;
   status?: string;
   tags?: string;
+  llmProvider?: string;
+  llmModel?: string;
   formatType?: string;
 }
 
@@ -58,6 +62,8 @@ export async function createSession(data: CreateSessionData): Promise<Session> {
         language: data.language ?? 'ko-KR',
         provider: data.provider,
         model: data.model,
+        llmProvider: data.llmProvider,
+        llmModel: data.llmModel,
         formatType: data.formatType ?? 'DEFAULT',
         status: 'DRAFT',
       },

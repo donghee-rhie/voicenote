@@ -22,6 +22,8 @@ export interface Session {
   language: string;
   provider?: string;
   model?: string;
+  llmProvider?: string;
+  llmModel?: string;
   formatType: FormatType;
   status: SessionStatus;
   tags?: string;
@@ -41,6 +43,8 @@ export interface SessionCreateRequest {
   language?: string;
   provider?: string;
   model?: string;
+  llmProvider?: string;
+  llmModel?: string;
   formatType?: FormatType;
   tags?: string;
 }
@@ -58,6 +62,8 @@ export interface SessionUpdateRequest {
   language?: string;
   provider?: string;
   model?: string;
+  llmProvider?: string;
+  llmModel?: string;
   formatType?: FormatType;
   status?: SessionStatus;
   tags?: string;

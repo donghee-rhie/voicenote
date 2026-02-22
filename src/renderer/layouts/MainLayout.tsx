@@ -57,21 +57,24 @@ export function MainLayout() {
     if (!window.electronAPI) return;
 
     const unsubscribeRecording = window.electronAPI.on('shortcut:recording-toggle', () => {
-      // 입력 필드 포커스 시 단축키 무시
-      if (isInputFocused()) {
-        return;
-      }
-      
+      if (isInputFocused()) return;
       console.log('[MainLayout] Recording toggle shortcut received');
-      
-      // 백그라운드 녹음 지원 - 대시보드로 이동하지 않음
-      // 단, 녹음 상태 관리가 대시보드에서만 가능하므로, 
-      // 현재 대시보드가 아니면 이동
-      if (location.pathname !== '/dashboard') {
-        navigate('/dashboard');
-      }
-      // Dispatch custom event for RecordingPanel to handle
-      window.dispatchEvent(new CustomEvent('toggle-recording'));
+      if (location.pathname !== '/dashboard') navigate('/dashboard');
+      window.dispatchEvent(new CustomEvent('toggle-recording', { detail: { mode: 'normal' } }));
+    });
+
+    const unsubscribeTranslation = window.electronAPI.on('shortcut:translation-toggle', () => {
+      if (isInputFocused()) return;
+      console.log('[MainLayout] Translation toggle shortcut received');
+      if (location.pathname !== '/dashboard') navigate('/dashboard');
+      window.dispatchEvent(new CustomEvent('toggle-recording', { detail: { mode: 'translate' } }));
+    });
+
+    const unsubscribeMinutes = window.electronAPI.on('shortcut:minutes-toggle', () => {
+      if (isInputFocused()) return;
+      console.log('[MainLayout] Minutes toggle shortcut received');
+      if (location.pathname !== '/dashboard') navigate('/dashboard');
+      window.dispatchEvent(new CustomEvent('toggle-recording', { detail: { mode: 'minutes' } }));
     });
 
     const unsubscribePaste = window.electronAPI.on('shortcut:paste-from-clipboard', async () => {
@@ -105,6 +108,8 @@ export function MainLayout() {
 
     return () => {
       unsubscribeRecording();
+      unsubscribeTranslation();
+      unsubscribeMinutes();
       unsubscribePaste();
     };
   }, [navigate, location.pathname, toast, isInputFocused]);
